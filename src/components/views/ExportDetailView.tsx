@@ -56,29 +56,52 @@ export const ExportDetailView: React.FC<ExportDetailViewProps> = ({
     { key: 'packaging', label: t.statusPackaging, icon: Package }
   ];
 
-  const getStepIndex = (status: ProcessingStatus) => {
-    switch (status) {
-      case 'queued':
-        return 0;
-      case 'resolving':
-      case 'awaiting_review':
-        return 1;
-      case 'downloading':
-        return 2;
-      case 'tagging':
-        return 3;
-      case 'packaging':
-        return 4;
-      case 'completed':
-      case 'partial':
-      case 'failed':
-        return 5;
-      default:
-        return 0;
+  // Accurate stage resolution: Only completed stages appear successful
+  // If retrieval fails for all tracks, tagging and packaging are strictly skipped
+  const getStageStatus = (key: ProcessingStatus): 'passed' | 'active' | 'failed' | 'skipped' => {
+    if (job.processingStatus === 'completed') {
+      return 'passed';
     }
-  };
 
-  const currentStepIndex = getStepIndex(job.processingStatus);
+    if (key === 'queued') {
+      if (job.processingStatus === 'queued') return 'active';
+      return 'passed';
+    }
+
+    if (key === 'resolving') {
+      if (job.processingStatus === 'queued') return 'skipped';
+      if (job.processingStatus === 'resolving' || job.processingStatus === 'awaiting_review') return 'active';
+      return 'passed';
+    }
+
+    if (key === 'downloading') {
+      if (['queued', 'resolving', 'awaiting_review'].includes(job.processingStatus)) return 'skipped';
+      if (job.processingStatus === 'downloading') return 'active';
+      if (job.processingStatus === 'failed' && job.successfulTracksCount === 0) return 'failed';
+      if (job.successfulTracksCount > 0) return 'passed';
+      return 'failed';
+    }
+
+    if (key === 'tagging') {
+      if (job.processingStatus === 'failed' && job.successfulTracksCount === 0) return 'skipped';
+      if (['queued', 'resolving', 'awaiting_review', 'downloading'].includes(job.processingStatus)) return 'skipped';
+      if (job.processingStatus === 'tagging') return 'active';
+      if (['packaging', 'completed', 'partial'].includes(job.processingStatus)) return 'passed';
+      if (job.processingStatus === 'failed') return 'failed';
+      return 'skipped';
+    }
+
+    if (key === 'packaging') {
+      if (job.artifactAvailability === 'available') return 'passed';
+      if (job.processingStatus === 'packaging') return 'active';
+      if (['failed', 'queued', 'resolving', 'awaiting_review', 'downloading', 'tagging'].includes(job.processingStatus)) {
+        return 'skipped';
+      }
+      return 'skipped';
+    }
+
+    return 'skipped';
+  };
 
   const handleRetry = async () => {
     if (isRetrying) return;
@@ -179,70 +202,76 @@ export const ExportDetailView: React.FC<ExportDetailViewProps> = ({
           </div>
         )}
 
-        {/* Error Message with Blocker Details */}
+        {/* Neutral Diagnostic Summary */}
         {job.errorMessage && (
           <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-xs text-rose-300 space-y-1">
             <div className="flex items-center gap-2 font-semibold">
               <AlertCircle className="h-4 w-4 shrink-0 text-rose-400" />
-              <span>{job.isRealPipeline ? 'Real Pipeline Blocker' : 'Export Error'}</span>
+              <span>{job.isRealPipeline ? 'Job Outcome' : 'Export Error'}</span>
             </div>
             <p className="leading-relaxed">{job.errorMessage}</p>
-            {job.isRealPipeline && (
-              <p className="text-[11px] text-zinc-400 mt-1">
-                If data-center IP protection or stream verification blocked extraction, you can test UI flows using the Simulated Demo mode.
-              </p>
-            )}
           </div>
         )}
 
-        {/* Overall Progress Bar */}
+        {/* Overall Progress Bar - accurately labeled, supports indeterminate */}
         <div className="space-y-1.5">
           <div className="flex items-center justify-between text-xs text-zinc-400 font-mono">
-            <span>Progress (Simulated)</span>
-            <span>{job.overallProgress}%</span>
+            <span>{job.isRealPipeline ? 'Export Progress' : 'Progress (Simulated)'}</span>
+            <span>
+              {job.overallProgress > 0 || isTerminal ? `${job.overallProgress}%` : 'Processing...'}
+            </span>
           </div>
-          <div className="h-2 w-full overflow-hidden rounded-full bg-zinc-800">
-            <div
-              className={`h-full transition-all duration-300 rounded-full ${
-                job.processingStatus === 'completed'
-                  ? 'bg-emerald-500'
-                  : job.processingStatus === 'partial'
-                  ? 'bg-amber-500'
-                  : job.processingStatus === 'failed'
-                  ? 'bg-rose-500'
-                  : 'bg-amber-400'
-              }`}
-              style={{ width: `${job.overallProgress}%` }}
-            />
+          <div className="h-2 w-full overflow-hidden rounded-full bg-zinc-800 relative">
+            {job.overallProgress <= 0 && !isTerminal ? (
+              <div className="h-full w-1/3 bg-amber-400 rounded-full animate-pulse" />
+            ) : (
+              <div
+                className={`h-full transition-all duration-300 rounded-full ${
+                  job.processingStatus === 'completed'
+                    ? 'bg-emerald-500'
+                    : job.processingStatus === 'partial'
+                    ? 'bg-amber-500'
+                    : job.processingStatus === 'failed'
+                    ? 'bg-rose-500'
+                    : 'bg-amber-400'
+                }`}
+                style={{ width: `${job.overallProgress}%` }}
+              />
+            )}
           </div>
         </div>
 
         {/* State Machine Step Pipeline Indicator */}
         <div className="grid grid-cols-5 gap-1 pt-1">
-          {steps.map((st, idx) => {
+          {steps.map((st) => {
             const Icon = st.icon;
-            const isPassed = currentStepIndex > idx || job.processingStatus === 'completed';
-            const isCurrent = currentStepIndex === idx && !isTerminal;
+            const stageStatus = getStageStatus(st.key);
+
+            let styleClasses = 'border-zinc-800/80 bg-zinc-950/20 text-zinc-600';
+            if (stageStatus === 'passed') {
+              styleClasses = 'border-emerald-500/30 bg-emerald-500/5 text-emerald-400';
+            } else if (stageStatus === 'active') {
+              styleClasses = 'border-amber-500 bg-amber-500/10 text-amber-300';
+            } else if (stageStatus === 'failed') {
+              styleClasses = 'border-rose-500/30 bg-rose-500/10 text-rose-400';
+            }
 
             return (
               <div
                 key={st.key}
-                className={`flex flex-col items-center py-2 px-1 rounded-xl text-center border transition ${
-                  isPassed
-                    ? 'border-emerald-500/30 bg-emerald-500/5 text-emerald-400'
-                    : isCurrent
-                    ? 'border-amber-500 bg-amber-500/10 text-amber-300'
-                    : 'border-zinc-800/80 bg-zinc-950/20 text-zinc-600'
-                }`}
+                className={`flex flex-col items-center py-2 px-1 rounded-xl text-center border transition ${styleClasses}`}
               >
                 <Icon
                   className={`h-4 w-4 mb-1 ${
-                    isCurrent && st.key !== 'queued' ? 'animate-spin' : ''
+                    stageStatus === 'active' && st.key !== 'queued' ? 'animate-spin' : ''
                   }`}
                 />
                 <span className="text-[10px] font-medium leading-tight truncate w-full">
                   {st.label}
                 </span>
+                {stageStatus === 'skipped' && isTerminal && (
+                  <span className="text-[8px] font-mono opacity-60">skipped</span>
+                )}
               </div>
             );
           })}
@@ -348,8 +377,13 @@ export const ExportDetailView: React.FC<ExportDetailViewProps> = ({
                 </div>
 
                 {track.failureReason && (
-                  <div className="text-[11px] text-rose-400 mt-0.5 truncate">
-                    {track.failureReason}
+                  <div className="text-[11px] text-rose-400 mt-0.5 leading-snug">
+                    {track.diagnostic?.category && (
+                      <span className="inline-block px-1.5 py-0.2 rounded bg-rose-500/10 border border-rose-500/20 text-[9px] uppercase font-mono mr-1.5">
+                        {track.diagnostic.category.replace('_', ' ')}
+                      </span>
+                    )}
+                    <span>{track.failureReason}</span>
                   </div>
                 )}
 
@@ -377,11 +411,27 @@ export const ExportDetailView: React.FC<ExportDetailViewProps> = ({
                 {track.status === 'resolving' && (
                   <span className="text-sky-400">Resolving...</span>
                 )}
+                {track.status === 'tagging' && (
+                  <span className="text-amber-400 flex items-center gap-1">
+                    <Tag className="h-3 w-3 animate-spin" />
+                    <span>Tagging</span>
+                  </span>
+                )}
                 {track.status === 'pending' && (
                   <span className="text-zinc-600">Pending</span>
                 )}
                 {track.status === 'failed' && (
-                  <span className="text-rose-400 font-semibold">Missing</span>
+                  <span className="text-rose-400 font-semibold">
+                    {track.diagnostic?.category === 'source_restriction'
+                      ? 'Restricted'
+                      : track.diagnostic?.category === 'timeout'
+                      ? 'Timed Out'
+                      : track.diagnostic?.category === 'extraction_failure'
+                      ? 'Unavailable'
+                      : track.diagnostic?.category === 'validation_error'
+                      ? 'Invalid ID'
+                      : 'Failed'}
+                  </span>
                 )}
                 {track.status === 'excluded' && (
                   <span className="text-zinc-500">Excluded</span>

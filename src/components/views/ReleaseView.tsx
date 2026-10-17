@@ -55,6 +55,10 @@ export const ReleaseView: React.FC<ReleaseViewProps> = ({
   const [showTechnicalDetails, setShowTechnicalDetails] = useState(false);
   const [exportMode, setExportMode] = useState<'real' | 'simulated'>(isLive ? 'real' : 'simulated');
 
+  useEffect(() => {
+    setExportMode(isLive ? 'real' : 'simulated');
+  }, [isLive]);
+
   // Selective track export state
   const [selectedTrackIds, setSelectedTrackIds] = useState<Set<string>>(new Set());
 
@@ -266,6 +270,7 @@ export const ReleaseView: React.FC<ReleaseViewProps> = ({
   const handleExportClick = async () => {
     if (isStarting || isNoneSelected) return;
     setIsStarting(true);
+    setErrorMessage(null);
     try {
       const selectedList = Array.from(selectedTrackIds);
       const job = await startExport(release, {
@@ -274,6 +279,8 @@ export const ReleaseView: React.FC<ReleaseViewProps> = ({
         selectedTrackIds: selectedList
       });
       onStartExport(job.id);
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Failed to start export.');
     } finally {
       setIsStarting(false);
     }
@@ -420,21 +427,24 @@ export const ReleaseView: React.FC<ReleaseViewProps> = ({
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
           <button
             type="button"
-            onClick={() => setExportMode('real')}
+            disabled={!isLive}
+            onClick={() => isLive && setExportMode('real')}
             className={`p-2.5 rounded-xl border text-left rtl:text-right transition ${
-              exportMode === 'real'
+              !isLive
+                ? 'border-zinc-800/60 bg-zinc-950/20 text-zinc-600 cursor-not-allowed'
+                : exportMode === 'real'
                 ? 'border-amber-500 bg-amber-500/10 text-amber-300 font-semibold'
                 : 'border-zinc-800 bg-zinc-950/40 text-zinc-400 hover:text-white'
             }`}
           >
             <div className="font-semibold text-zinc-100 flex items-center gap-1.5">
               <span>Real Audio Pipeline</span>
-              {exportMode === 'real' && <Check className="h-3.5 w-3.5 text-amber-400" />}
+              {isLive && exportMode === 'real' && <Check className="h-3.5 w-3.5 text-amber-400" />}
             </div>
             <div className="text-[11px] text-zinc-400 font-normal mt-0.5">
               {isLive
-                ? 'Downloads audio via server yt-dlp & packages real MP3 ZIP'
-                : 'Synthesizes clean audio tones via FFmpeg & packages real MP3 ZIP'}
+                ? 'Downloads streams via yt-dlp, tags with FFmpeg, and packages real MP3 ZIP'
+                : 'Available for YouTube Music catalog releases (switch catalog source in Settings)'}
             </div>
           </button>
 

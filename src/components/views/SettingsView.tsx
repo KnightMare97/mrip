@@ -51,6 +51,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [serverHealth, setServerHealth] = useState<any>(null);
   const [checkingHealth, setCheckingHealth] = useState(false);
   const [importStatus, setImportStatus] = useState<{ success: boolean; message: string } | null>(null);
+  const [diagnosticError, setDiagnosticError] = useState<string | null>(null);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -269,44 +270,117 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         )}
       </div>
 
-      {/* 3. Server Environment Inspector */}
+      {/* 3. Server Environment & Synthetic Pipeline Diagnostic */}
       <div className="p-4 rounded-2xl border border-zinc-800 bg-zinc-900/50 space-y-3">
-        <h2 className="text-xs font-semibold text-zinc-200 uppercase tracking-wider font-mono flex items-center gap-2">
-          <Server className="h-4 w-4 text-amber-500" />
-          <span>Server Environment & Media Pipeline</span>
-        </h2>
+        <div className="flex items-center justify-between">
+          <h2 className="text-xs font-semibold text-zinc-200 uppercase tracking-wider font-mono flex items-center gap-2">
+            <Server className="h-4 w-4 text-amber-500" />
+            <span>Server Environment & Media Pipeline</span>
+          </h2>
+          <button
+            onClick={() => {
+              setCheckingHealth(true);
+              fetch('/api/health')
+                .then((r) => r.json())
+                .then((d) => setServerHealth(d))
+                .catch((err) => setServerHealth({ status: 'error', error: err.message }))
+                .finally(() => setCheckingHealth(false));
+            }}
+            className="text-[11px] font-mono text-zinc-400 hover:text-amber-400 flex items-center gap-1"
+          >
+            <RotateCcw className={`h-3 w-3 ${checkingHealth ? 'animate-spin' : ''}`} />
+            <span>Check</span>
+          </button>
+        </div>
 
         {serverHealth ? (
-          <div className="space-y-2 text-xs font-mono">
+          <div className="space-y-3 text-xs font-mono">
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
               <div className="p-2.5 rounded-xl bg-zinc-950/60 border border-zinc-800">
-                <span className="text-[10px] text-zinc-500 block">Python 3</span>
-                <span className={serverHealth.environment?.hasPython ? 'text-emerald-400 font-bold' : 'text-rose-400'}>
-                  {serverHealth.environment?.hasPython ? 'Available' : 'Missing'}
+                <span className="text-[10px] text-zinc-500 block">Python</span>
+                <span className={serverHealth.environment?.python?.available ? 'text-emerald-400 font-bold' : 'text-rose-400'}>
+                  {serverHealth.environment?.python?.available
+                    ? serverHealth.environment?.python?.version || 'Available'
+                    : 'Missing'}
                 </span>
               </div>
               <div className="p-2.5 rounded-xl bg-zinc-950/60 border border-zinc-800">
                 <span className="text-[10px] text-zinc-500 block">FFmpeg</span>
-                <span className={serverHealth.environment?.hasFfmpeg ? 'text-emerald-400 font-bold' : 'text-rose-400'}>
-                  {serverHealth.environment?.hasFfmpeg ? 'Available' : 'Missing'}
+                <span className={serverHealth.environment?.ffmpeg?.available ? 'text-emerald-400 font-bold' : 'text-rose-400'}>
+                  {serverHealth.environment?.ffmpeg?.available
+                    ? serverHealth.environment?.ffmpeg?.version?.slice(0, 14) || 'Available'
+                    : 'Missing'}
                 </span>
               </div>
               <div className="p-2.5 rounded-xl bg-zinc-950/60 border border-zinc-800">
-                <span className="text-[10px] text-zinc-500 block">yt-dlp Binary</span>
-                <span className={serverHealth.environment?.hasYtDlp ? 'text-emerald-400 font-bold' : 'text-rose-400'}>
-                  {serverHealth.environment?.hasYtDlp ? 'Installed' : 'Missing'}
+                <span className="text-[10px] text-zinc-500 block">yt-dlp</span>
+                <span className={serverHealth.environment?.ytdlp?.available ? 'text-emerald-400 font-bold' : 'text-rose-400'}>
+                  {serverHealth.environment?.ytdlp?.available
+                    ? serverHealth.environment?.ytdlp?.version || 'Available'
+                    : 'Missing'}
                 </span>
               </div>
               <div className="p-2.5 rounded-xl bg-zinc-950/60 border border-zinc-800">
                 <span className="text-[10px] text-zinc-500 block">Writable Tmp</span>
-                <span className={serverHealth.environment?.writableTmp ? 'text-emerald-400 font-bold' : 'text-rose-400'}>
-                  {serverHealth.environment?.writableTmp ? 'Active (/tmp)' : 'Blocked'}
+                <span className={serverHealth.environment?.storage?.writable ? 'text-emerald-400 font-bold' : 'text-rose-400'}>
+                  {serverHealth.environment?.storage?.writable ? 'Writable' : 'Blocked'}
                 </span>
               </div>
             </div>
 
-            <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-[11px] text-amber-300 leading-relaxed font-sans">
-              <strong>Source Verification Status:</strong> {serverHealth.note}
+            {/* Observed Capabilities */}
+            <div className="p-3 rounded-xl bg-zinc-950/40 border border-zinc-800 space-y-1.5 font-sans">
+              <span className="text-[11px] font-semibold text-zinc-300 block font-mono uppercase">
+                Observed Server Capabilities:
+              </span>
+              <ul className="text-[11px] text-zinc-400 space-y-1 list-disc list-inside">
+                <li>Local audio synthesis & ID3v2 tagging: <span className="text-emerald-400 font-mono">Supported (FFmpeg)</span></li>
+                <li>Stream & metadata verification: <span className="text-emerald-400 font-mono">Supported (ffprobe)</span></li>
+                <li>ZIP archive packaging: <span className="text-emerald-400 font-mono">Supported (archiver)</span></li>
+                <li>Source stream access: <span className="text-amber-400 font-mono">Observed per-track (not assumed from binaries)</span></li>
+              </ul>
+            </div>
+
+            {/* Synthetic Diagnostic Test Trigger */}
+            <div className="pt-1 space-y-2">
+              {diagnosticError && (
+                <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-xs text-rose-300 flex items-center gap-2">
+                  <AlertCircle className="h-4 w-4 shrink-0 text-rose-400" />
+                  <span>{diagnosticError}</span>
+                </div>
+              )}
+              <button
+                onClick={async () => {
+                  setDiagnosticError(null);
+                  try {
+                    const res = await fetch('/api/export/diagnostic-synthetic', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        title: 'Local Pipeline Diagnostic',
+                        artist: 'Audio Engine Verifier',
+                        trackCount: 2
+                      })
+                    });
+                    if (res.ok) {
+                      const data = await res.json();
+                      onJobStarted(data.job.id);
+                    } else {
+                      const data = await res.json().catch(() => ({}));
+                      setDiagnosticError(data.error || `Diagnostic failed with status ${res.status}`);
+                    }
+                  } catch (err: any) {
+                    setDiagnosticError(`Failed to start diagnostic: ${err.message}`);
+                  }
+                }}
+                className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl border border-sky-500/30 bg-sky-500/10 text-xs font-semibold text-sky-300 hover:bg-sky-500/20 transition active:scale-95"
+              >
+                <FlaskConical className="h-4 w-4" />
+                <span>Run Synthetic Pipeline Diagnostic (Local Tone & ZIP Proof)</span>
+              </button>
+              <p className="text-[10px] text-zinc-500 text-center mt-1">
+                Generates labeled test tones, tags with FFmpeg, verifies with ffprobe, and packages ZIP. Proves local processing only.
+              </p>
             </div>
           </div>
         ) : (

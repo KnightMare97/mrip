@@ -137,15 +137,27 @@ function MainApp() {
           />
         )}
 
-        {currentView === 'export-detail' && selectedJobId && (
-          <ExportDetailView
-            jobId={selectedJobId}
-            onViewAllJobs={() => navigateTo('activity')}
-            onBackToRelease={(relId) => {
-              setSelectedReleaseId(relId);
-              navigateTo('release');
-            }}
-          />
+        {currentView === 'export-detail' && (
+          selectedJobId || activeJobId ? (
+            <ExportDetailView
+              jobId={selectedJobId || activeJobId!}
+              onViewAllJobs={() => navigateTo('activity')}
+              onBackToRelease={(relId) => {
+                setSelectedReleaseId(relId);
+                navigateTo('release');
+              }}
+            />
+          ) : (
+            <div className="rounded-3xl border border-zinc-800 bg-zinc-900/40 p-10 text-center text-xs text-zinc-400 space-y-3">
+              <p>No active export job selected.</p>
+              <button
+                onClick={() => navigateTo('activity')}
+                className="px-4 py-2 rounded-xl bg-amber-500 text-zinc-950 font-semibold text-xs hover:bg-amber-400 transition"
+              >
+                View Export Activity
+              </button>
+            </div>
+          )
         )}
 
         {currentView === 'settings' && (

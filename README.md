@@ -1,114 +1,117 @@
 # Music Rip — Personal Mobile-First Music Discovery & Album Export PWA
 
-A refined, mobile-first music discovery and album export prototype built with React 19, TypeScript, and Tailwind CSS. Features typed fictional mock catalog data, bilingual English/Persian RTL layout support, a dual-status state-machine export simulation engine, and PWA offline app-shell capabilities.
+A mobile-first music discovery and album export application built with React 19, TypeScript, Express, and Tailwind CSS. Features real YouTube Music catalog browsing, a dual-engine architecture (real server export pipeline and an offline simulated state-machine demo), bounded diagnostics, and bilingual English / Persian RTL layout support.
 
 ---
 
-## 1. Feature Breakdown: Implemented vs. Simulated vs. Deferred
+## 1. Implemented Code
 
-### ✅ Implemented Features (Working Code & UI)
-- **Search View**: Instant filter by artist name, Persian title, or genre. Zero-pill recent searches with history clearance.
-- **Artist View**: Discography listing with cover art, release year (or unknown metadata indicator), edition labels, and interactive type filters (`All`, `Albums`, `EPs`, `Singles`, `Live`).
-- **Release View**: Full ordered tracklists grouped strictly by Disc number (multi-disc support), edition badges, per-track artist credits, target encoding format (`Target format: MP3`), and duration indicators.
-- **Bilingual English & Persian Support**: Global language switch (`EN` ↔ `فا`) with bidirectional mirroring (`dir="ltr"` / `dir="rtl"`), Vazirmatn Persian typography, and mixed-script titles.
-- **PWA Capabilities**: Web App Manifest (`manifest.webmanifest`), SVG brand icons, in-app install prompt hook (`usePWAInstall`), iOS home-screen instructions, and offline detection.
-- **Ergonomic Mobile Layout**: Thumb-zone navigation bar with safe-area spacing (`pb-safe`), and non-overlapping sticky bottom CTA bar.
-- **Pluggable Architecture**: Decoupled `MusicCatalog` and `ExportService` TypeScript interfaces allowing zero-refactor backend adapter replacement.
+### 🚀 Server-Side Pipeline & Execution Controls (`src/server/`)
+- **Pipeline Manager (`src/server/worker.ts`)**:
+  - **Single Active Worker**: Concurrency lock ensuring at most 1 active export worker to prevent CPU/memory exhaustion.
+  - **Bounded Queue**: Rejects requests when queue exceeds 5 jobs (HTTP 429).
+  - **Bounded Batch Size**: Limits selection to a maximum of 50 tracks per export (`MAX_TRACKS_PER_JOB = 50`).
+  - **Bounded Runtime**: Per-track timeout (120 seconds) with process abort controls (`SIGTERM` followed by `SIGKILL`).
+  - **Non-Destructive Retry**: Re-evaluates only failed tracks while preserving already completed audio files and local paths.
+  - **Artifact TTL & Cleanup**: 1-hour expiration on completed ZIP archives and periodic background sweeping.
+- **Diagnostics Categorizer (`src/server/diagnostics.ts`)**:
+  - Distinguishes exact failure modes instead of assuming data-center IP blocks:
+    - `missing_executable`: Binary not installed or missing at path.
+    - `permission_error`: Execution permission denied (EACCES).
+    - `timeout`: Subprocess exceeded allocated time limit.
+    - `extraction_failure`: Video removed, private, or format unavailable.
+    - `source_restriction`: Interactive bot challenges, sign-in gates, age restrictions, or geo-blocks.
+    - `conversion_failure`: FFmpeg / libmp3lame transcoding failures.
+    - `packaging_failure`: ZIP archiver or file lock errors.
+    - `unknown`: Non-zero exit code without established diagnostic category.
+  - Captures bounded stderr/stdout (capped at 2KB) preserving original diagnostics in server logs and returning sanitized details to the client.
+- **Output Contract & Tagging (`src/server/metadata.ts`, `src/server/packaging.ts`)**:
+  - Embeds validated title, artist, album artist, album, genuine release year (without fabricating a fallback year), track number, and disc number.
+  - Downloads and embeds release cover art into ID3v2 tags via FFmpeg when available.
+  - Multi-disc ZIP organization: Preserves `Disc 1/`, `Disc 2/` directory structure for multi-disc releases; uses root paths for single-disc releases.
+  - Post-generation verification: Validates output MP3 files with `ffprobe` JSON stream inspection before marking tracks completed.
+- **Input Validation & Security (`server.ts`, `src/server/auth.ts`)**:
+  - Validates YouTube video ID format (`/^[a-zA-Z0-9_-]{11}$/`).
+  - Rejects empty track selections and unsupported IDs; never silently replaces requested tracks with synthetic tones.
+  - `personalAuthMiddleware`: Protects processing and download endpoints for personal use via `MUSICRIP_API_SECRET` or same-origin validation.
+- **Observed Capabilities Inspection (`/api/health`)**:
+  - Runs bounded version checks for Python, FFmpeg, ffprobe, and yt-dlp.
+  - Performs active writability tests on the temporary export directory.
+  - Reports observed capabilities without assuming source access from executable existence alone.
 
-### 🧪 Simulated Demo Features (Clearly Labeled as Demo)
-- **Dual Lifecycle State Machine**:
-  - Processing states: `queued` → `resolving` → `awaiting_review` → `downloading` → `tagging` → `packaging` → `completed` | `partial` | `failed`.
-  - Artifact states: `not_created` → `available` → `expired`.
-- **Honest Demo Behavior**:
-  - **No Fake ZIP Downloads**: No fabricated browser downloads of empty bytes. Instead, an interactive **Simulated Archive Inspector** displays the virtual ZIP directory structure, file sizes, and ID3v2 tags.
-  - **Strict Partial Accuracy**: A 10-track album with 9 successful tracks is classified as **Partial**, not Complete.
-  - **No Silent Substitutions**: Ambiguous track matches pause the state machine and raise an **Ambiguous Match Review Modal** allowing user selection or track exclusion.
-  - **Non-Destructive Retry**: Retrying a partial or failed export keeps previously completed tracks intact without duplicating them.
-  - **Interrupted Recovery**: Reloading the page during a simulation safely marks the job as interrupted rather than hallucinating server-side persistence.
-- **Developer Scenario Panel**: Collapsible panel to test:
-  1. *Success*: 100% full export.
-  2. *Missing Track*: Stream unretrievable, yielding partial status.
-  3. *Ambiguous Match*: Pauses at track 2 to review live/cover candidates.
-  4. *Server Error*: 503 Service Unavailable with retry recovery.
-  5. *Expired Archive*: Completed processing with expired storage link.
-
-### ⏳ Deferred Work (Out of Scope for Initial UI Phase)
-- Real YouTube/audio stream scrapers or audio transcoding pipelines.
-- User authentication and persistent cloud databases.
-- Automatic cloud deployments or paid third-party APIs.
-- Real MusicBrainz/Discogs live API calls.
+### 💻 Client UI & State Mapping (`src/components/views/ExportDetailView.tsx`)
+- Accurately distinguishes **Real Audio Pipeline** from **Demo** modes.
+- True progress mapping: Displays indeterminate progress when real progress is unavailable, with zero arbitrary progress jumps.
+- Accurate stage indicators: Only completed stages appear successful. If retrieval fails for all tracks, tagging and packaging are displayed as skipped rather than pending or completed.
+- Detailed per-track diagnostic tags (`Restricted`, `Timed Out`, `Unavailable`, `Invalid ID`) displaying sanitized messages directly under track titles.
 
 ---
 
-## 2. Project Structure
+## 2. Executed Tests & Verification Results
 
-```
-├── public/
-│   ├── icon.svg                 # Brand vector icon for PWA
-│   ├── manifest.webmanifest     # Standalone PWA installation manifest
-│   └── sw.js                    # App shell service worker (media excluded)
-├── src/
-│   ├── components/
-│   │   ├── common/
-│   │   │   ├── AmbiguousMatchModal.tsx     # Review dialog for uncertain matches
-│   │   │   ├── ArtworkPlaceholder.tsx      # Generative geometric SVG album art
-│   │   │   ├── BottomNav.tsx               # Ergonomic mobile thumb-zone navigation
-│   │   │   ├── DevScenarioPanel.tsx        # Collapsible scenario test triggers
-│   │   │   ├── Header.tsx                  # 3-zone top bar with RTL & PWA triggers
-│   │   │   ├── OfflineIndicator.tsx        # Network status warning banner
-│   │   │   └── SimulatedArchiveModal.tsx   # Virtual ZIP hierarchy & ID3 tags
-│   │   └── views/
-│   │       ├── ArtistView.tsx              # Discography and release filters
-│   │       ├── ExportDetailView.tsx        # State machine progress & track statuses
-│   │       ├── RecentJobsView.tsx          # Export history & retry actions
-│   │       ├── ReleaseView.tsx             # Ordered disc tracklists & export CTA
-│   │       ├── SearchView.tsx              # Artist discovery and recent searches
-│   │       └── SettingsView.tsx            # Scenario picker & language toggles
-│   ├── context/
-│   │   ├── CatalogContext.tsx              # MusicCatalog provider
-│   │   ├── ExportContext.tsx               # ExportService provider
-│   │   └── LanguageContext.tsx             # English LTR / Persian RTL strings
-│   ├── hooks/
-│   │   ├── useOnlineStatus.ts              # Connectivity listener
-│   │   └── usePWAInstall.ts                # In-app PWA install prompt handler
-│   ├── services/
-│   │   ├── catalog/
-│   │   │   ├── MockMusicCatalog.ts         # 100% fictional artists and releases
-│   │   │   └── MusicCatalog.ts             # Replaceable catalog interface
-│   │   └── export/
-│   │       ├── ExportService.ts            # Replaceable export interface
-│   │       └── SimulatedExportService.ts   # State-machine simulation engine
-│   ├── types/
-│   │   ├── export.ts                       # Dual status, match candidate, and job types
-│   │   └── music.ts                        # Artist, Release, Disc, and Track types
-│   ├── App.tsx                             # Top-level view router and state wiring
-│   ├── index.css                           # Tailwind CSS v4, fonts, and safe areas
-│   └── main.tsx                            # React root entry point
-├── metadata.json                           # AI Studio metadata
-├── package.json                            # Scripts & dependencies
-└── tsconfig.json                           # TypeScript configuration
+All tests run deterministically via Node's native test runner (`tsx --test test/**/*.test.ts`).
+
+### Test Suite Execution Output
+```text
+✔ Export Simulator - Excluded tracks remain excluded and process moves to next track (380ms)
+✔ Export Simulator - Cancellation disposes intervals and stops stale completion (501ms)
+✔ Export Simulator - Retry preserves successful tracks without duplicates and respects exclusions (736ms)
+✔ Export Simulator - Zero successful tracks marks job failed with no archive (137ms)
+✔ Diagnostics - Classifies missing executable (ENOENT) (3ms)
+✔ Diagnostics - Classifies permission denied (EACCES) (0.4ms)
+✔ Diagnostics - Classifies process timeout (0.4ms)
+✔ Diagnostics - Classifies non-bot extraction error (video unavailable/private) (0.3ms)
+✔ Diagnostics - Classifies source restriction (bot verification / sign-in requirement) (0.4ms)
+✔ Diagnostics - Classifies geo-restriction (0.2ms)
+✔ Diagnostics - Classifies conversion failure (0.4ms)
+✔ Diagnostics - Classifies packaging failure (0.2ms)
+✔ Diagnostics - Uses unknown category when cause is not established (1ms)
+✔ Packaging - Builds ZIP filename without fabricating a fallback year (1.6ms)
+✔ Packaging - Preserves multi-disc structure in ZIP paths (57ms)
+✔ Pipeline Manager - Cancellation terminates job and marks failed with not_created archive (2ms)
+✔ Pipeline Manager - Retry preserves valid successful tracks without re-downloading (203ms)
+✔ Server API - Health check reports observed capabilities with bounded checks (1131ms)
+✔ Pipeline Verification A - Explicit Synthetic Diagnostic (Local processing & ZIP proof) (447ms)
+✔ Pipeline Validation - Unknown or unsupported track IDs fail validation and never fabricate tone (7ms)
+✔ Pipeline Validation - Rejects empty track selection (5ms)
+✔ Pipeline Verification B - Authorized source integration (Records actual outcome and diagnostic evidence) (2446ms)
+
+Total: 22 passed, 0 failed (7.2s)
 ```
 
 ---
 
-## 3. Short Backend Integration Checklist
+## 3. Verified Integrations
 
-When ready to implement real backend ingestion and audio packaging, follow this checklist:
+1. **YouTube Music Catalog API (`/api/catalog/*`)**:
+   - Artist search with high-resolution avatar extraction.
+   - Discography retrieval (`getArtist`, `topAlbums`, `topSingles`, and `searchAlbums`).
+   - Full tracklist extraction with duration parsing and video IDs.
+2. **Local Audio Synthesis & Encoding (FFmpeg + libmp3lame)**:
+   - 192k MP3 audio encoding with ID3v2 tags.
+   - Cover art embedding as attached pictures.
+3. **Media Verification (ffprobe)**:
+   - JSON format and stream verification verifying MP3 audio stream, duration, and metadata tags.
+4. **ZIP Archive Packaging (Archiver)**:
+   - Creation of valid ZIP archives (PK header verified), preserving multi-disc directory hierarchies.
+5. **Synthetic Pipeline Diagnostic (`/api/export/diagnostic-synthetic`)**:
+   - End-to-end local generation of labeled test tone MP3s, ffprobe verification, and ZIP packaging.
 
-1. **Catalog Service Integration**:
-   - [ ] Implement `MusicCatalog` adapter pointing to MusicBrainz, Discogs, or custom metadata API.
-   - [ ] Preserve release edition labels, multi-disc indices, and per-track artist credits.
-2. **Audio Resolution & Match Verification**:
-   - [ ] Implement stream resolver with fingerprint or audio duration matching.
-   - [ ] Check duration threshold ($\pm 3$ seconds) and title normalization.
-   - [ ] When confidence is $< 0.85$, trigger the existing `awaiting_review` state with candidate matches rather than guessing.
-3. **Queue & Worker Architecture**:
-   - [ ] Replace `SimulatedExportService` with an HTTP/WebSocket client connecting to a backend task runner (e.g. BullMQ / Celery / Cloud Tasks).
-   - [ ] Keep `processingStatus` and `artifactAvailability` distinct in the database schema.
-4. **Packaging & Tagging**:
-   - [ ] Encode to target MP3 with LAME (`id3v2.4` standard tags: Artist, Album, Title, Track No, Disc No, Year).
-   - [ ] Assemble ZIP file with subdirectories for multi-disc sets (`Disc 01/`, `Disc 02/`).
-   - [ ] Generate signed temporary download URL and set `artifactAvailability: 'available'` with TTL expiration.
-5. **Storage Retention**:
-   - [ ] Set object storage lifecycle policy to delete temporary ZIP files after 24 hours.
-   - [ ] Transition `artifactAvailability` to `'expired'` in job record without deleting the export history record.
+---
+
+## 4. Unverified Integrations
+
+1. **Unrestricted YouTube Stream Extraction**:
+   - YouTube frequently challenges cloud/data-center IPs with interactive bot verification challenges or sign-in gates.
+   - Media stream access is determined strictly per track and reported neutrally without assuming all cloud IPs are blocked.
+2. **Multi-Node Distributed Queue**:
+   - The current worker implementation is bounded to 1 concurrent in-memory worker for personal use on a single server instance. Distributed queue backends (e.g., Redis/BullMQ) are unverified.
+
+---
+
+## 5. Known Blockers & Diagnostic Truth
+
+- **Source Restrictions vs. Server Diagnosis**:
+  - An outcome of 0 successful tracks is **an outcome, not a diagnosis**.
+  - When YouTube issues a challenge (e.g. `Sign in to confirm you’re not a bot`), the pipeline records `source_restriction` with the exact sanitized reason, rather than asserting that the server IP is blocked.
+  - The pipeline never silently substitutes failed or unsupported music tracks with generated test tones. Synthetic tests remain strictly isolated behind the explicit diagnostic endpoint.

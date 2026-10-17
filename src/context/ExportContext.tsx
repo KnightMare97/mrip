@@ -50,7 +50,7 @@ export const ExportProvider: React.FC<{
 
   const startExport = async (release: Release, options?: ExportOptions) => {
     const isLiveRelease = release.id.startsWith('ytm-rel:') || release.providerId.startsWith('ytmusic:');
-    const shouldUseReal = options?.exportMode === 'real' || (options?.exportMode !== 'simulated' && isLiveRelease);
+    const shouldUseReal = isLiveRelease && (options?.exportMode === 'real' || options?.exportMode !== 'simulated');
 
     let job: ExportJob;
     if (shouldUseReal) {

@@ -25,6 +25,25 @@ export type TrackExportStatus =
   | 'failed'
   | 'excluded';
 
+export type DiagnosticCategory =
+  | 'missing_executable'
+  | 'permission_error'
+  | 'timeout'
+  | 'extraction_failure'
+  | 'source_restriction'
+  | 'conversion_failure'
+  | 'packaging_failure'
+  | 'validation_error'
+  | 'unknown';
+
+export interface TrackDiagnostic {
+  category: DiagnosticCategory;
+  stage: 'validation' | 'extraction' | 'download' | 'conversion' | 'tagging' | 'packaging';
+  exitCode?: number | null;
+  sanitizedMessage: string;
+  rawSummary?: string;
+}
+
 export interface TrackExportItem {
   trackId: string;
   discNumber: number;
@@ -36,6 +55,7 @@ export interface TrackExportItem {
   status: TrackExportStatus;
   progressPercent: number; // 0 - 100 for simulated download
   failureReason?: string;
+  diagnostic?: TrackDiagnostic;
   selectedCandidate?: MatchCandidate;
 }
 

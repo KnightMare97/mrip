@@ -177,7 +177,7 @@ export class ServerExportService implements ExportService {
           return;
         }
 
-        // Map updated tracks
+        // Map updated tracks with diagnostics
         currentJob.tracks = (serverJob.tracks || []).map((t: any) => ({
           trackId: t.trackId,
           discNumber: t.discNumber || 1,
@@ -186,7 +186,8 @@ export class ServerExportService implements ExportService {
           artistCredit: t.artistCredit,
           status: t.status === 'converting' ? 'tagging' : t.status,
           progressPercent: t.progressPercent || 0,
-          failureReason: t.error
+          failureReason: t.diagnostic?.sanitizedMessage || t.error,
+          diagnostic: t.diagnostic
         }));
 
         currentJob.processingStatus = serverJob.processingStatus;
@@ -213,12 +214,12 @@ export class ServerExportService implements ExportService {
       } catch (err) {
         console.error('Error polling server job:', err);
       }
-    }, 1000);
+    }, 800);
 
     this.pollingTimers.set(jobId, timer);
   }
 
-  async retryJob(jobId: string, options?: ExportOptions): Promise<ExportJob | null> {
+  async retryJob(jobId: string, _options?: ExportOptions): Promise<ExportJob | null> {
     const job = this.jobs.get(jobId);
     if (!job) return null;
 
@@ -227,33 +228,25 @@ export class ServerExportService implements ExportService {
       this.pollingTimers.delete(jobId);
     }
 
-    const mockRelease: Release = {
-      id: job.releaseId,
-      providerId: job.releaseId,
-      artistId: 'unknown',
-      artistName: job.artistName,
-      title: job.releaseTitle,
-      year: job.year,
-      type: 'album',
-      isLive: false,
-      editionLabel: job.editionLabel,
-      coverSeed: `cov-${job.releaseId}`,
-      discs: [
-        {
-          discNumber: 1,
-          tracks: job.tracks.map((t) => ({
-            id: t.trackId,
-            providerId: t.trackId,
-            discNumber: t.discNumber,
-            trackNumber: t.trackNumber,
-            title: t.title,
-            artistCredit: t.artistCredit
-          }))
-        }
-      ]
-    };
-
-    return this.startExport(mockRelease, options);
+    try {
+      const res = await fetch(`/api/export/retry/${encodeURIComponent(jobId)}`, {
+        method: 'POST'
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `Retry failed with status ${res.status}`);
+      }
+      const data = await res.json();
+      const updatedJob = this.jobs.get(jobId) || job;
+      updatedJob.processingStatus = data.job.processingStatus;
+      updatedJob.errorMessage = undefined;
+      this.notify(updatedJob);
+      this.pollJob(jobId);
+      return updatedJob;
+    } catch (err: any) {
+      console.error('Failed to retry server job:', err);
+      return null;
+    }
   }
 
   async cancelJob(jobId: string): Promise<boolean> {
@@ -263,11 +256,20 @@ export class ServerExportService implements ExportService {
       this.pollingTimers.delete(jobId);
     }
 
+    try {
+      await fetch(`/api/export/cancel/${encodeURIComponent(jobId)}`, {
+        method: 'POST'
+      });
+    } catch (err) {
+      console.error('Failed to call server cancel endpoint:', err);
+    }
+
     const job = this.jobs.get(jobId);
     if (!job) return false;
 
     job.processingStatus = 'failed';
-    job.errorMessage = 'Export canceled by user.';
+    job.errorMessage = 'Export cancelled by user.';
+    job.artifactAvailability = 'not_created';
     this.notify(job);
     return true;
   }
