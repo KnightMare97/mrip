@@ -1,0 +1,6 @@
+{
+  "name": "Music Rip",
+  "description": "Personal mobile-first music discovery and album export PWA prototype with typed catalog, state machine export simulation, and bilingual RTL support.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

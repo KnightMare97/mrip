@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <radialGradient id="discGrad" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#1c1917" />
+      <stop offset="60%" stop-color="#0f0e0d" />
+      <stop offset="100%" stop-color="#090807" />
+    </radialGradient>
+    <linearGradient id="goldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fbbf24" />
+      <stop offset="50%" stop-color="#f59e0b" />
+      <stop offset="100%" stop-color="#b45309" />
+    </linearGradient>
+    <linearGradient id="groove" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="rgba(255,255,255,0.08)" />
+      <stop offset="50%" stop-color="rgba(255,255,255,0.02)" />
+      <stop offset="100%" stop-color="rgba(255,255,255,0.08)" />
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="512" height="512" rx="104" fill="#121214" />
+  
+  <!-- Outer Vinyl Rim -->
+  <circle cx="256" cy="256" r="200" fill="url(#discGrad)" stroke="#27272a" stroke-width="4" />
+  
+  <!-- Vinyl Grooves -->
+  <circle cx="256" cy="256" r="172" fill="none" stroke="url(#groove)" stroke-width="2" />
+  <circle cx="256" cy="256" r="148" fill="none" stroke="url(#groove)" stroke-width="2" />
+  <circle cx="256" cy="256" r="124" fill="none" stroke="url(#groove)" stroke-width="2" />
+  
+  <!-- Center Label -->
+  <circle cx="256" cy="256" r="82" fill="#18181b" stroke="url(#goldGrad)" stroke-width="6" />
+
+  <!-- Center Spindle & Export Arrow Motif -->
+  <!-- Waveform / Export Arrow -->
+  <path d="M256 195 V285 M224 255 L256 287 L288 255" fill="none" stroke="url(#goldGrad)" stroke-width="12" stroke-linecap="round" stroke-linejoin="round" />
+  
+  <!-- Spindle Dot -->
+  <circle cx="256" cy="256" r="8" fill="#fbbf24" />
+
+  <!-- Base Tray Accent Line -->
+  <path d="M216 320 H296" fill="none" stroke="url(#goldGrad)" stroke-width="8" stroke-linecap="round" />
+</svg>
