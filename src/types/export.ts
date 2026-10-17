@@ -104,9 +104,18 @@ export interface ExportJob {
   simulatedArchive?: SimulatedArchive;
   isInterrupted?: boolean; // Flagged when reloaded during an incomplete simulation
   scenarioPreset?: 'default' | 'missing_track' | 'ambiguous_match' | 'server_error' | 'expired_archive';
+  runId?: number; // Execution / run identifier for stale-run guard
+  isSelective?: boolean; // True if exporting a subset of release tracks
+  downloadRequested?: boolean; // True when user clicked to download/inspect the generated archive
+  isRealPipeline?: boolean; // True when job is processed by real server backend
+  realDownloadUrl?: string; // Direct URL to download genuine generated ZIP
+  realZipFilename?: string; // Actual archive filename
+  realZipSizeBytes?: number; // Actual ZIP size in bytes
 }
 
 export interface ExportOptions {
   scenarioPreset?: 'default' | 'missing_track' | 'ambiguous_match' | 'server_error' | 'expired_archive';
   targetFormat?: string;
+  selectedTrackIds?: string[]; // Specific track IDs to export (selective export)
+  exportMode?: 'real' | 'simulated'; // Choice between real audio pipeline and state machine demo
 }

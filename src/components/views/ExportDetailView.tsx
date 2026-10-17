@@ -112,8 +112,12 @@ export const ExportDetailView: React.FC<ExportDetailViewProps> = ({
       <div className="p-5 rounded-3xl border border-zinc-800 bg-zinc-900/50 shadow-sm space-y-4">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <div className="flex items-center gap-2 text-[11px] font-mono text-amber-500 mb-1">
-              <span className="font-semibold">{t.demoBadge}</span>
+            <div className="flex items-center gap-2 text-[11px] font-mono mb-1">
+              {job.isRealPipeline ? (
+                <span className="font-semibold text-sky-400">Real Audio Pipeline</span>
+              ) : (
+                <span className="font-semibold text-amber-500">{t.demoBadge}</span>
+              )}
               <span>·</span>
               <span className="text-zinc-500">ID: {job.id}</span>
             </div>
@@ -175,11 +179,19 @@ export const ExportDetailView: React.FC<ExportDetailViewProps> = ({
           </div>
         )}
 
-        {/* Error Message */}
+        {/* Error Message with Blocker Details */}
         {job.errorMessage && (
-          <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-xs text-rose-300 flex items-center gap-2">
-            <AlertCircle className="h-4 w-4 shrink-0" />
-            <span>{job.errorMessage}</span>
+          <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-xs text-rose-300 space-y-1">
+            <div className="flex items-center gap-2 font-semibold">
+              <AlertCircle className="h-4 w-4 shrink-0 text-rose-400" />
+              <span>{job.isRealPipeline ? 'Real Pipeline Blocker' : 'Export Error'}</span>
+            </div>
+            <p className="leading-relaxed">{job.errorMessage}</p>
+            {job.isRealPipeline && (
+              <p className="text-[11px] text-zinc-400 mt-1">
+                If data-center IP protection or stream verification blocked extraction, you can test UI flows using the Simulated Demo mode.
+              </p>
+            )}
           </div>
         )}
 
@@ -236,9 +248,22 @@ export const ExportDetailView: React.FC<ExportDetailViewProps> = ({
           })}
         </div>
 
-        {/* Primary Job Actions (Inspector, Retry, Cancel) */}
+        {/* Primary Job Actions (Real Download, Inspector, Retry, Cancel) */}
         <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-zinc-800">
-          {job.simulatedArchive && job.artifactAvailability === 'available' && (
+          {job.isRealPipeline && job.artifactAvailability === 'available' && job.realDownloadUrl && (
+            <a
+              href={job.realDownloadUrl}
+              download={job.realZipFilename || 'album.zip'}
+              className="flex-1 min-w-[160px] flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-amber-500 text-xs font-bold text-zinc-950 hover:bg-amber-400 shadow-md shadow-amber-500/10 transition active:scale-95"
+            >
+              <Download className="h-4 w-4" />
+              <span>
+                Download Real ZIP ({job.realZipSizeBytes ? `${(job.realZipSizeBytes / (1024 * 1024)).toFixed(1)} MB` : 'MP3 ZIP'})
+              </span>
+            </a>
+          )}
+
+          {!job.isRealPipeline && job.simulatedArchive && job.artifactAvailability === 'available' && (
             <button
               onClick={() => setShowArchiveInspector(true)}
               className="flex-1 min-w-[160px] flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-amber-500 text-xs font-bold text-zinc-950 hover:bg-amber-400 shadow-md shadow-amber-500/10 transition active:scale-95"

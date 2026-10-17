@@ -13,6 +13,7 @@ export interface Artist {
   genre: string;
   releasesCount: number;
   avatarSeed: string; // Deterministic seed for original placeholder artwork
+  coverUrl?: string; // High-res image URL from live providers (e.g., YouTube Music)
 }
 
 export interface Track {
@@ -26,7 +27,7 @@ export interface Track {
   durationSeconds?: number; // Optional: unknown if provider doesn't supply it
   isLive?: boolean; // Independent boolean flag
   isBonus?: boolean;
-  sourceQuality?: string; // e.g., "Lossless 44.1kHz", "Source Stream 160k", or "Unknown"
+  sourceQuality?: string;
 }
 
 export interface Disc {
@@ -49,6 +50,7 @@ export interface Release {
   isLive: boolean; // Independent boolean
   editionLabel?: string; // Optional free text (e.g., "2024 Remaster", "Deluxe 2-CD Edition")
   coverSeed: string; // Seed for generative geometric cover artwork
+  coverUrl?: string; // High-res artwork from live provider
   discs: Disc[];
   targetFormat?: string; // e.g., "MP3"
   label?: string;

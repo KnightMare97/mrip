@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { ExportService } from '../services/export/ExportService';
+import { serverExportService } from '../services/export/ServerExportService';
 import { defaultExportService } from '../services/export/SimulatedExportService';
 import { ExportJob, ExportOptions, MatchCandidate } from '../types/export';
 import { Release } from '../types/music';
@@ -21,35 +22,67 @@ const ExportContext = createContext<ExportContextType | undefined>(undefined);
 
 export const ExportProvider: React.FC<{
   children: React.ReactNode;
-  initialService?: ExportService;
-}> = ({ children, initialService = defaultExportService }) => {
-  const [service] = useState<ExportService>(initialService);
-  const [jobs, setJobs] = useState<ExportJob[]>(() => initialService.getAllJobs());
+}> = ({ children }) => {
+  const [simJobs, setSimJobs] = useState<ExportJob[]>(() => defaultExportService.getAllJobs());
+  const [srvJobs, setSrvJobs] = useState<ExportJob[]>(() => serverExportService.getAllJobs());
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
 
   useEffect(() => {
-    const unsub = service.subscribeAll((updatedJobs) => {
-      setJobs([...updatedJobs]);
+    const unsubSim = defaultExportService.subscribeAll((updatedJobs) => {
+      setSimJobs([...updatedJobs]);
     });
-    return unsub;
-  }, [service]);
+    const unsubSrv = serverExportService.subscribeAll((updatedJobs) => {
+      setSrvJobs([...updatedJobs]);
+    });
+    return () => {
+      unsubSim();
+      unsubSrv();
+    };
+  }, []);
+
+  // Merge and deduplicate by job id
+  const jobsMap = new Map<string, ExportJob>();
+  simJobs.forEach((j) => jobsMap.set(j.id, j));
+  srvJobs.forEach((j) => jobsMap.set(j.id, j));
+  const jobs = Array.from(jobsMap.values()).sort((a, b) => b.createdAt - a.createdAt);
 
   const activeJob = jobs.find((j) => j.id === activeJobId) || null;
 
   const startExport = async (release: Release, options?: ExportOptions) => {
-    const job = await service.startExport(release, options);
+    const isLiveRelease = release.id.startsWith('ytm-rel:') || release.providerId.startsWith('ytmusic:');
+    const shouldUseReal = options?.exportMode === 'real' || (options?.exportMode !== 'simulated' && isLiveRelease);
+
+    let job: ExportJob;
+    if (shouldUseReal) {
+      job = await serverExportService.startExport(release, options);
+    } else {
+      job = await defaultExportService.startExport(release, options);
+    }
+
     setActiveJobId(job.id);
     return job;
   };
 
   const retryJob = async (jobId: string, options?: ExportOptions) => {
-    const job = await service.retryJob(jobId, options);
+    const existing = jobs.find((j) => j.id === jobId);
+    let job: ExportJob | null = null;
+
+    if (existing?.isRealPipeline) {
+      job = await serverExportService.retryJob(jobId, options);
+    } else {
+      job = await defaultExportService.retryJob(jobId, options);
+    }
+
     if (job) setActiveJobId(job.id);
     return job;
   };
 
   const cancelJob = async (jobId: string) => {
-    return service.cancelJob(jobId);
+    const existing = jobs.find((j) => j.id === jobId);
+    if (existing?.isRealPipeline) {
+      return serverExportService.cancelJob(jobId);
+    }
+    return defaultExportService.cancelJob(jobId);
   };
 
   const resolveAmbiguousMatch = async (
@@ -57,17 +90,18 @@ export const ExportProvider: React.FC<{
     trackId: string,
     candidate: MatchCandidate | null
   ) => {
-    return service.resolveAmbiguousMatch(jobId, trackId, candidate);
+    return defaultExportService.resolveAmbiguousMatch(jobId, trackId, candidate);
   };
 
   const simulateArtifactExpiry = (jobId: string) => {
-    service.simulateArtifactExpiry(jobId);
+    defaultExportService.simulateArtifactExpiry(jobId);
+    serverExportService.simulateArtifactExpiry(jobId);
   };
 
   return (
     <ExportContext.Provider
       value={{
-        service,
+        service: defaultExportService,
         jobs,
         activeJob,
         activeJobId,

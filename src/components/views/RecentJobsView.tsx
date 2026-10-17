@@ -4,6 +4,7 @@ import {
   ArrowRight,
   CheckCircle2,
   Clock,
+  Download,
   FolderArchive,
   History,
   Loader2,
@@ -93,6 +94,15 @@ export const RecentJobsView: React.FC<RecentJobsViewProps> = ({
                           minute: '2-digit'
                         })}
                       </span>
+                      {job.isRealPipeline ? (
+                        <span className="text-[9px] font-mono text-sky-400 bg-sky-500/10 px-1.5 py-0.2 rounded border border-sky-500/20">
+                          Real Pipeline
+                        </span>
+                      ) : (
+                        <span className="text-[9px] font-mono text-amber-500/90 bg-amber-500/10 px-1.5 py-0.2 rounded border border-amber-500/20">
+                          Demo
+                        </span>
+                      )}
                       {job.scenarioPreset && job.scenarioPreset !== 'default' && (
                         <span className="text-[9px] font-mono text-amber-500/90 bg-amber-500/10 px-1.5 py-0.2 rounded border border-amber-500/20">
                           {job.scenarioPreset}
@@ -151,8 +161,19 @@ export const RecentJobsView: React.FC<RecentJobsViewProps> = ({
                   </div>
 
                   <div className="flex items-center gap-2">
-                    {/* Simulated Expiry Toggle for testing */}
-                    {job.artifactAvailability === 'available' && (
+                    {job.isRealPipeline && job.artifactAvailability === 'available' && job.realDownloadUrl && (
+                      <a
+                        href={job.realDownloadUrl}
+                        download={job.realZipFilename || 'album.zip'}
+                        className="flex items-center gap-1 text-[11px] font-bold text-amber-400 hover:text-amber-300 transition"
+                        title="Download real ZIP archive"
+                      >
+                        <Download className="h-3 w-3" />
+                        <span>Download ZIP</span>
+                      </a>
+                    )}
+
+                    {!job.isRealPipeline && job.artifactAvailability === 'available' && (
                       <button
                         onClick={() => simulateArtifactExpiry(job.id)}
                         className="text-[10px] text-zinc-500 hover:text-purple-400 transition"

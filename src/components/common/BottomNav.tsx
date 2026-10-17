@@ -1,7 +1,8 @@
-import { Disc, History, Music, Search, Sliders } from 'lucide-react';
+import { Bookmark, Clock, History, Library, Music, Search, Sliders } from 'lucide-react';
 import React from 'react';
 import { useExport } from '../../context/ExportContext';
 import { useLanguage } from '../../context/LanguageContext';
+import { useLibrary } from '../../context/LibraryContext';
 
 interface BottomNavProps {
   currentView: string;
@@ -11,6 +12,7 @@ interface BottomNavProps {
 export const BottomNav: React.FC<BottomNavProps> = ({ currentView, onNavigate }) => {
   const { t } = useLanguage();
   const { jobs } = useExport();
+  const { favorites, watchlist } = useLibrary();
 
   const activeRunningCount = jobs.filter(
     (j) =>
@@ -19,12 +21,19 @@ export const BottomNav: React.FC<BottomNavProps> = ({ currentView, onNavigate })
       )
   ).length;
 
+  const libraryTotal = favorites.length + watchlist.length;
+
   const tabs = [
     { id: 'search', label: t.navSearch, icon: Search },
-    { id: 'artists', label: t.navLibrary, icon: Music },
     {
-      id: 'jobs',
-      label: t.navJobs,
+      id: 'library',
+      label: 'Library',
+      icon: Library,
+      badge: libraryTotal > 0 ? libraryTotal : null
+    },
+    {
+      id: 'activity',
+      label: 'Activity',
       icon: History,
       badge: activeRunningCount > 0 ? activeRunningCount : null
     },
@@ -41,8 +50,8 @@ export const BottomNav: React.FC<BottomNavProps> = ({ currentView, onNavigate })
           const Icon = tab.icon;
           const isActive =
             currentView === tab.id ||
-            (tab.id === 'artists' && (currentView === 'artist' || currentView === 'release')) ||
-            (tab.id === 'jobs' && currentView === 'export-detail');
+            (tab.id === 'search' && (currentView === 'artist' || currentView === 'release')) ||
+            (tab.id === 'activity' && currentView === 'export-detail');
 
           return (
             <button
@@ -54,9 +63,9 @@ export const BottomNav: React.FC<BottomNavProps> = ({ currentView, onNavigate })
             >
               <div className="relative">
                 <Icon className={`h-5 w-5 ${isActive ? 'stroke-[2.2]' : 'stroke-[1.8]'}`} />
-                {tab.badge && (
+                {tab.badge !== null && tab.badge !== undefined && (
                   <span className="absolute -top-1 -right-2 flex h-4 w-4 items-center justify-center rounded-full bg-amber-500 text-[9px] font-bold text-zinc-950 font-mono">
-                    {tab.badge}
+                    {tab.badge > 99 ? '99+' : tab.badge}
                   </span>
                 )}
               </div>

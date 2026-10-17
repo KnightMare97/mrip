@@ -1,9 +1,10 @@
-import React from 'react';
+import React, { useState } from 'react';
 
 interface ArtworkPlaceholderProps {
   seed: string;
   title?: string;
   artist?: string;
+  coverUrl?: string;
   size?: 'sm' | 'md' | 'lg' | 'xl';
   className?: string;
 }
@@ -22,12 +23,13 @@ export const ArtworkPlaceholder: React.FC<ArtworkPlaceholderProps> = ({
   seed,
   title,
   artist,
+  coverUrl,
   size = 'md',
   className = ''
 }) => {
+  const [imgError, setImgError] = useState(false);
   const hash = hashCode(seed);
 
-  // Deterministic palette selections
   const palettes = [
     { bg1: '#18181b', bg2: '#09090b', accent1: '#f59e0b', accent2: '#b45309', ring: '#27272a' },
     { bg1: '#1c1917', bg2: '#0c0a09', accent1: '#fbbf24', accent2: '#78350f', ring: '#292524' },
@@ -53,6 +55,24 @@ export const ArtworkPlaceholder: React.FC<ArtworkPlaceholderProps> = ({
     .join('')
     .toUpperCase();
 
+  // If live provider artwork is present and not errored, render real cover
+  if (coverUrl && !imgError) {
+    return (
+      <div
+        className={`relative overflow-hidden shrink-0 shadow-lg border border-zinc-800/80 select-none bg-zinc-950 ${sizeClasses} ${className}`}
+      >
+        <img
+          src={coverUrl}
+          alt={title ? `${title} album cover` : 'Cover'}
+          className="w-full h-full object-cover transition-opacity duration-300"
+          onError={() => setImgError(true)}
+          loading="lazy"
+        />
+        <div className="absolute inset-0 pointer-events-none ring-1 ring-inset ring-white/10 rounded-[inherit]" />
+      </div>
+    );
+  }
+
   return (
     <div
       className={`relative overflow-hidden shrink-0 shadow-lg border border-zinc-800/80 select-none flex items-center justify-center ${sizeClasses} ${className}`}
@@ -74,7 +94,6 @@ export const ArtworkPlaceholder: React.FC<ArtworkPlaceholderProps> = ({
         </defs>
 
         {patternType === 0 && (
-          // Concentric Vinyl Rings with Diagonal Blade
           <g>
             <circle cx="100" cy="100" r="85" fill="none" stroke={palette.ring} strokeWidth="2" />
             <circle cx="100" cy="100" r="65" fill="none" stroke={palette.ring} strokeWidth="1.5" />
@@ -86,7 +105,6 @@ export const ArtworkPlaceholder: React.FC<ArtworkPlaceholderProps> = ({
         )}
 
         {patternType === 1 && (
-          // Isometric Monolith / Prism
           <g>
             <polygon points="100,25 170,65 170,145 100,185 30,145 30,65" fill="none" stroke={palette.ring} strokeWidth="2" />
             <polygon points="100,25 170,65 100,105 30,65" fill={`url(#grad-${hash})`} opacity="0.4" />
@@ -97,7 +115,6 @@ export const ArtworkPlaceholder: React.FC<ArtworkPlaceholderProps> = ({
         )}
 
         {patternType === 2 && (
-          // Celestial Horizon / Acoustic Waves
           <g>
             <path d="M20 140 Q 100 80, 180 140" fill="none" stroke={palette.accent1} strokeWidth="3" />
             <path d="M20 120 Q 100 60, 180 120" fill="none" stroke={`url(#grad-${hash})`} strokeWidth="2" opacity="0.6" />
@@ -107,7 +124,6 @@ export const ArtworkPlaceholder: React.FC<ArtworkPlaceholderProps> = ({
         )}
 
         {patternType === 3 && (
-          // Geometric Minimalist Arch & Orbit
           <g>
             <rect x="55" y="40" width="90" height="120" rx="45" fill="none" stroke={`url(#grad-${hash})`} strokeWidth="3" />
             <ellipse cx="100" cy="100" rx="75" ry="30" fill="none" stroke={palette.ring} strokeWidth="2" transform="rotate(-25 100 100)" />
@@ -116,14 +132,12 @@ export const ArtworkPlaceholder: React.FC<ArtworkPlaceholderProps> = ({
         )}
       </svg>
 
-      {/* Monogram Overlay for smaller sizes */}
       {(size === 'sm' || size === 'md') && (
         <span className="relative z-10 font-bold tracking-wider text-amber-400/90 font-mono">
           {initials}
         </span>
       )}
 
-      {/* Ambient Inner Shadow */}
       <div className="absolute inset-0 pointer-events-none ring-1 ring-inset ring-white/5 rounded-[inherit]" />
     </div>
   );

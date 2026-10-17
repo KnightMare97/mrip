@@ -1,17 +1,27 @@
 import {
+  AlertCircle,
+  AlertTriangle,
   Check,
-  Cpu,
-  Database,
+  CheckCircle2,
+  Clock,
+  Download,
+  FileJson,
+  FlaskConical,
   Globe,
+  HardDrive,
   Info,
   Layers,
   RotateCcw,
+  Server,
   ShieldCheck,
   Sliders,
-  Trash2
+  Trash2,
+  Upload
 } from 'lucide-react';
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { useCatalog } from '../../context/CatalogContext';
 import { useLanguage } from '../../context/LanguageContext';
+import { useLibrary } from '../../context/LibraryContext';
 import { ExportOptions } from '../../types/export';
 import { DevScenarioPanel } from '../common/DevScenarioPanel';
 
@@ -27,41 +37,289 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   onJobStarted
 }) => {
   const { language, setLanguage, t } = useLanguage();
+  const { source, setSource } = useCatalog();
+  const {
+    exportBackup,
+    importBackup,
+    clearAllUserData,
+    preferences,
+    updatePreferences,
+    favorites,
+    watchlist
+  } = useLibrary();
 
-  const handleResetAllData = () => {
+  const [serverHealth, setServerHealth] = useState<any>(null);
+  const [checkingHealth, setCheckingHealth] = useState(false);
+  const [importStatus, setImportStatus] = useState<{ success: boolean; message: string } | null>(null);
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    setCheckingHealth(true);
+    fetch('/api/health')
+      .then((r) => r.json())
+      .then((d) => setServerHealth(d))
+      .catch((err) => setServerHealth({ status: 'error', error: err.message }))
+      .finally(() => setCheckingHealth(false));
+  }, []);
+
+  const handleExportBackup = async () => {
+    const data = await exportBackup();
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `musicrip-backup-${new Date().toISOString().split('T')[0]}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      const res = await importBackup(parsed);
+      if (res.success) {
+        setImportStatus({
+          success: true,
+          message: `Backup restored successfully! (${res.countSummary})`
+        });
+      } else {
+        setImportStatus({
+          success: false,
+          message: res.error || 'Failed to restore backup.'
+        });
+      }
+    } catch (err: any) {
+      setImportStatus({
+        success: false,
+        message: `Invalid backup file: ${err.message}`
+      });
+    }
+
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
+  const handleConfirmClearAll = async () => {
+    await clearAllUserData();
     localStorage.removeItem('musicrip_export_jobs_v1');
     localStorage.removeItem('musicrip_recent_searches');
+    setShowClearConfirm(false);
     window.location.reload();
   };
 
   return (
     <div className="space-y-6 pb-24">
+      {/* Title */}
       <div>
-        <h1 className="text-lg font-bold text-zinc-100 flex items-center gap-2">
-          <Sliders className="h-5 w-5 text-amber-500" />
+        <h1 className="text-xl font-bold tracking-tight text-zinc-100 flex items-center gap-2">
+          <Sliders className="h-6 w-6 text-amber-500" />
           <span>{t.navSettings}</span>
         </h1>
         <p className="text-xs text-zinc-400 mt-0.5">
-          Simulation scenarios, interface language, and prototype adapters
+          Local library management, catalog sources, backup, and simulation
         </p>
       </div>
 
-      {/* Developer Scenario Controls */}
-      <DevScenarioPanel
-        selectedPreset={selectedPreset}
-        onSelectPreset={onSelectPreset}
-        onJobStarted={onJobStarted}
-      />
+      {/* 1. Catalog Source Selector */}
+      <div className="p-4 rounded-2xl border border-zinc-800 bg-zinc-900/50 space-y-3">
+        <h2 className="text-xs font-semibold text-zinc-200 uppercase tracking-wider font-mono flex items-center gap-2">
+          <Layers className="h-4 w-4 text-amber-500" />
+          <span>Catalog Source Adapter</span>
+        </h2>
+        <p className="text-xs text-zinc-400 leading-relaxed">
+          Select between live YouTube Music catalog browsing or the offline fictional demo catalog.
+        </p>
 
-      {/* Language & Layout Direction */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+          <button
+            onClick={() => setSource('ytmusic')}
+            className={`p-3 rounded-xl border text-xs text-left rtl:text-right transition ${
+              source === 'ytmusic'
+                ? 'border-amber-500 bg-amber-500/10 text-amber-300 font-semibold'
+                : 'border-zinc-800 bg-zinc-950/40 text-zinc-400 hover:text-zinc-200'
+            }`}
+          >
+            <div className="flex items-center justify-between mb-1">
+              <span className="font-semibold text-zinc-100">YouTube Music (Live)</span>
+              {source === 'ytmusic' && <Check className="h-4 w-4 text-amber-400" />}
+            </div>
+            <p className="text-[11px] text-zinc-500 font-normal leading-snug">
+              Queries live artists, albums, and tracklists via server-side open-source client.
+            </p>
+          </button>
+
+          <button
+            onClick={() => setSource('demo')}
+            className={`p-3 rounded-xl border text-xs text-left rtl:text-right transition ${
+              source === 'demo'
+                ? 'border-amber-500 bg-amber-500/10 text-amber-300 font-semibold'
+                : 'border-zinc-800 bg-zinc-950/40 text-zinc-400 hover:text-zinc-200'
+            }`}
+          >
+            <div className="flex items-center justify-between mb-1">
+              <span className="font-semibold text-zinc-100">Fictional Demo</span>
+              {source === 'demo' && <Check className="h-4 w-4 text-amber-400" />}
+            </div>
+            <p className="text-[11px] text-zinc-500 font-normal leading-snug">
+              100% fictional artists, releases, and SVG art for offline development and testing.
+            </p>
+          </button>
+        </div>
+      </div>
+
+      {/* 2. Data Backup & Local Storage */}
+      <div className="p-4 rounded-2xl border border-zinc-800 bg-zinc-900/50 space-y-4">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h2 className="text-xs font-semibold text-zinc-200 uppercase tracking-wider font-mono flex items-center gap-2">
+              <HardDrive className="h-4 w-4 text-amber-500" />
+              <span>Local Storage & Backup</span>
+            </h2>
+            <p className="text-xs text-zinc-400 mt-1 leading-relaxed">
+              Your library is stored in this browser on this device. Cross-device and Telegram synchronization are not implemented yet.
+            </p>
+          </div>
+
+          <div className="text-[11px] font-mono text-zinc-500 shrink-0 text-right">
+            <div>{favorites.length} Favorites</div>
+            <div>{watchlist.length} in Later</div>
+          </div>
+        </div>
+
+        {/* Import status notification */}
+        {importStatus && (
+          <div
+            className={`p-3 rounded-xl border text-xs flex items-center gap-2 ${
+              importStatus.success
+                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
+            }`}
+          >
+            {importStatus.success ? <CheckCircle2 className="h-4 w-4" /> : <AlertCircle className="h-4 w-4" />}
+            <span>{importStatus.message}</span>
+          </div>
+        )}
+
+        {/* Backup / Restore Action Buttons */}
+        <div className="flex flex-wrap items-center gap-2.5 pt-1">
+          <button
+            onClick={handleExportBackup}
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-zinc-800 text-xs font-semibold text-zinc-200 hover:bg-zinc-700 hover:text-white transition active:scale-95 border border-zinc-700"
+          >
+            <Download className="h-3.5 w-3.5 text-amber-400" />
+            <span>Export Backup (JSON)</span>
+          </button>
+
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-zinc-800 text-xs font-semibold text-zinc-200 hover:bg-zinc-700 hover:text-white transition active:scale-95 border border-zinc-700"
+          >
+            <Upload className="h-3.5 w-3.5 text-sky-400" />
+            <span>Restore Backup</span>
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".json,application/json"
+            onChange={handleFileChange}
+            className="hidden"
+          />
+
+          <button
+            onClick={() => setShowClearConfirm(true)}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-zinc-800 text-xs font-medium text-zinc-400 hover:text-rose-400 hover:border-rose-900/50 transition ml-auto"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            <span>Clear Local Data</span>
+          </button>
+        </div>
+
+        {/* Clear Confirmation Modal */}
+        {showClearConfirm && (
+          <div className="p-4 rounded-xl bg-rose-500/10 border border-rose-500/30 text-xs text-rose-300 space-y-3">
+            <div className="font-semibold flex items-center gap-1.5">
+              <AlertTriangle className="h-4 w-4 text-rose-400" />
+              <span>Are you sure you want to delete all local library data?</span>
+            </div>
+            <p className="text-[11px] text-zinc-400 leading-relaxed">
+              This will permanently delete all favorited artists, albums, tracks, your Later list, and local search/view history from this browser. This cannot be undone unless you have a JSON backup.
+            </p>
+            <div className="flex items-center gap-2 pt-1">
+              <button
+                onClick={handleConfirmClearAll}
+                className="px-3 py-1.5 rounded-lg bg-rose-600 text-white font-semibold hover:bg-rose-500 text-xs transition"
+              >
+                Yes, Delete All Data
+              </button>
+              <button
+                onClick={() => setShowClearConfirm(false)}
+                className="px-3 py-1.5 rounded-lg bg-zinc-800 text-zinc-300 text-xs hover:bg-zinc-700 transition"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* 3. Server Environment Inspector */}
+      <div className="p-4 rounded-2xl border border-zinc-800 bg-zinc-900/50 space-y-3">
+        <h2 className="text-xs font-semibold text-zinc-200 uppercase tracking-wider font-mono flex items-center gap-2">
+          <Server className="h-4 w-4 text-amber-500" />
+          <span>Server Environment & Media Pipeline</span>
+        </h2>
+
+        {serverHealth ? (
+          <div className="space-y-2 text-xs font-mono">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              <div className="p-2.5 rounded-xl bg-zinc-950/60 border border-zinc-800">
+                <span className="text-[10px] text-zinc-500 block">Python 3</span>
+                <span className={serverHealth.environment?.hasPython ? 'text-emerald-400 font-bold' : 'text-rose-400'}>
+                  {serverHealth.environment?.hasPython ? 'Available' : 'Missing'}
+                </span>
+              </div>
+              <div className="p-2.5 rounded-xl bg-zinc-950/60 border border-zinc-800">
+                <span className="text-[10px] text-zinc-500 block">FFmpeg</span>
+                <span className={serverHealth.environment?.hasFfmpeg ? 'text-emerald-400 font-bold' : 'text-rose-400'}>
+                  {serverHealth.environment?.hasFfmpeg ? 'Available' : 'Missing'}
+                </span>
+              </div>
+              <div className="p-2.5 rounded-xl bg-zinc-950/60 border border-zinc-800">
+                <span className="text-[10px] text-zinc-500 block">yt-dlp Binary</span>
+                <span className={serverHealth.environment?.hasYtDlp ? 'text-emerald-400 font-bold' : 'text-rose-400'}>
+                  {serverHealth.environment?.hasYtDlp ? 'Installed' : 'Missing'}
+                </span>
+              </div>
+              <div className="p-2.5 rounded-xl bg-zinc-950/60 border border-zinc-800">
+                <span className="text-[10px] text-zinc-500 block">Writable Tmp</span>
+                <span className={serverHealth.environment?.writableTmp ? 'text-emerald-400 font-bold' : 'text-rose-400'}>
+                  {serverHealth.environment?.writableTmp ? 'Active (/tmp)' : 'Blocked'}
+                </span>
+              </div>
+            </div>
+
+            <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-[11px] text-amber-300 leading-relaxed font-sans">
+              <strong>Source Verification Status:</strong> {serverHealth.note}
+            </div>
+          </div>
+        ) : (
+          <div className="text-xs text-zinc-500 font-mono">Checking server capabilities...</div>
+        )}
+      </div>
+
+      {/* 4. Language & Layout Direction */}
       <div className="p-4 rounded-2xl border border-zinc-800 bg-zinc-900/50 space-y-3">
         <h2 className="text-xs font-semibold text-zinc-200 uppercase tracking-wider font-mono flex items-center gap-2">
           <Globe className="h-4 w-4 text-amber-500" />
           <span>Language & Layout Direction</span>
         </h2>
-        <p className="text-xs text-zinc-400">
-          Music Rip supports English (LTR) and Persian (RTL) with mixed-script typography.
-        </p>
 
         <div className="grid grid-cols-2 gap-2 pt-1">
           <button
@@ -90,45 +348,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         </div>
       </div>
 
-      {/* Pluggable Service Layer Status */}
-      <div className="p-4 rounded-2xl border border-zinc-800 bg-zinc-900/50 space-y-3">
-        <h2 className="text-xs font-semibold text-zinc-200 uppercase tracking-wider font-mono flex items-center gap-2">
-          <Layers className="h-4 w-4 text-amber-500" />
-          <span>Replaceable Service Architecture</span>
-        </h2>
-        <div className="space-y-2 text-xs font-mono">
-          <div className="flex items-center justify-between p-2 rounded-lg bg-zinc-950/40 border border-zinc-800/80">
-            <span className="text-zinc-400">MusicCatalog Adapter:</span>
-            <span className="text-amber-400 font-semibold">MockMusicCatalog (Active)</span>
-          </div>
-          <div className="flex items-center justify-between p-2 rounded-lg bg-zinc-950/40 border border-zinc-800/80">
-            <span className="text-zinc-400">ExportService Adapter:</span>
-            <span className="text-amber-400 font-semibold">SimulatedExportService (Active)</span>
-          </div>
-          <div className="flex items-center justify-between p-2 rounded-lg bg-zinc-950/40 border border-zinc-800/80">
-            <span className="text-zinc-400">PWA App Shell Caching:</span>
-            <span className="text-emerald-400 font-semibold">Static Only (sw.js)</span>
-          </div>
-        </div>
-        <p className="text-[11px] text-zinc-500 leading-relaxed">
-          Both interfaces are decoupled via TypeScript definitions and React Context. In future backend phases, real MusicBrainz/Discogs or backend task queues drop into the same interfaces without changing any UI views.
-        </p>
-      </div>
-
-      {/* Prototype Reset */}
-      <div className="p-4 rounded-2xl border border-zinc-800 bg-zinc-900/50 flex items-center justify-between">
-        <div>
-          <div className="text-xs font-semibold text-zinc-200">Reset Prototype Data</div>
-          <div className="text-[11px] text-zinc-500">Clears simulated jobs and recent searches</div>
-        </div>
-        <button
-          onClick={handleResetAllData}
-          className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-zinc-800 text-xs font-medium text-zinc-400 hover:text-rose-400 hover:border-rose-900/50 transition"
-        >
-          <Trash2 className="h-3.5 w-3.5" />
-          <span>Reset All</span>
-        </button>
-      </div>
+      {/* 5. Collapsible Developer Simulation Scenarios (Section 7 requirement) */}
+      <DevScenarioPanel
+        selectedPreset={selectedPreset}
+        onSelectPreset={onSelectPreset}
+        onJobStarted={onJobStarted}
+      />
     </div>
   );
 };
