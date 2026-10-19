@@ -164,7 +164,7 @@ export const ArtistView: React.FC<ArtistViewProps> = ({
   const handleToggleWatchlist = async (e: React.MouseEvent, release: Release) => {
     e.stopPropagation();
     const watchId = `${isLive ? 'live' : 'demo'}:${release.providerId}`;
-    const totalTracks = release.discs.reduce((acc, d) => acc + d.tracks.length, 0);
+    const totalTracks = (release.discs || []).reduce((acc, d) => acc + (d.tracks?.length || 0), 0);
 
     await toggleWatchlist({
       id: watchId,
@@ -298,7 +298,7 @@ export const ArtistView: React.FC<ArtistViewProps> = ({
               const relFavId = `${isLive ? 'live' : 'demo'}:${release.providerId}`;
               const isRelFav = isFavorite(relFavId);
               const isRelWatched = isWatchlisted(relFavId);
-              const totalTracks = release.discs.reduce((acc, d) => acc + d.tracks.length, 0);
+              const totalTracks = (release.discs || []).reduce((acc, d) => acc + (d.tracks?.length || 0), 0);
 
               return (
                 <div

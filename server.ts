@@ -200,6 +200,7 @@ app.get('/api/catalog/artist/:id/releases', async (req: Request, res: Response) 
           isLive: r.name?.toLowerCase().includes('live') || false,
           coverSeed: `ytm-cov-${id}`,
           coverUrl: thumbnail,
+          discs: [],
           targetFormat: 'MP3'
         };
       });

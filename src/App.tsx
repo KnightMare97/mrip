@@ -20,7 +20,7 @@ type ViewMode = 'search' | 'library' | 'activity' | 'settings' | 'artist' | 'rel
 
 function MainApp() {
   const { t } = useLanguage();
-  const { setActiveJobId } = useExport();
+  const { activeJobId, setActiveJobId } = useExport();
 
   const [currentView, setCurrentView] = useState<ViewMode>('search');
   const [selectedArtistId, setSelectedArtistId] = useState<string>('art-chroma-drift');

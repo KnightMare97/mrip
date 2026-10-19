@@ -140,7 +140,7 @@ export class SimulatedExportService implements ExportService {
 
   async startExport(release: Release, options?: ExportOptions): Promise<ExportJob> {
     const jobId = `job-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-    const allTracks: Track[] = release.discs.flatMap((d) => d.tracks);
+    const allTracks: Track[] = (release.discs || []).flatMap((d) => d.tracks || []);
 
     // Support selective export
     const selectedTrackIds = options?.selectedTrackIds;

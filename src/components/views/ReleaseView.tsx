@@ -76,7 +76,7 @@ export const ReleaseView: React.FC<ReleaseViewProps> = ({
 
           if (rel) {
             // Default all tracks selected
-            const allIds = rel.discs.flatMap((d) => d.tracks.map((t) => t.id));
+            const allIds = (rel.discs || []).flatMap((d) => (d.tracks || []).map((t) => t.id));
             setSelectedTrackIds(new Set(allIds));
 
             // Record viewed item
@@ -141,16 +141,16 @@ export const ReleaseView: React.FC<ReleaseViewProps> = ({
     );
   }
 
-  const allTracks = release.discs.flatMap((d) => d.tracks);
+  const allTracks = (release.discs || []).flatMap((d) => d.tracks || []);
   const totalTracks = allTracks.length;
   const selectedCount = selectedTrackIds.size;
   const isAllSelected = selectedCount === totalTracks && totalTracks > 0;
   const isNoneSelected = selectedCount === 0;
 
-  const totalSeconds = release.discs.reduce(
+  const totalSeconds = (release.discs || []).reduce(
     (acc, d) =>
       acc +
-      d.tracks.reduce((s, trk) => {
+      (d.tracks || []).reduce((s, trk) => {
         return selectedTrackIds.has(trk.id) ? s + (trk.durationSeconds || 0) : s;
       }, 0),
     0
@@ -489,10 +489,10 @@ export const ReleaseView: React.FC<ReleaseViewProps> = ({
 
       {/* Ordered Tracklist Grouped by Disc */}
       <div className="space-y-6">
-        {release.discs.map((disc) => (
+        {(release.discs || []).map((disc) => (
           <div key={disc.discNumber} className="space-y-2">
             {/* Disc Header if multi-disc */}
-            {release.discs.length > 1 && (
+            {(release.discs || []).length > 1 && (
               <div className="flex items-center gap-2 px-1 text-xs font-semibold text-zinc-400 uppercase tracking-wider font-mono">
                 <Disc className="h-4 w-4 text-amber-500" />
                 <span>

@@ -1,632 +1,192 @@
-import { spawn, ChildProcess } from 'child_process';
-import fs from 'fs';
-import path from 'path';
+import fs from 'node:fs';
+import path from 'node:path';
 import { classifyProcessError } from './diagnostics';
-import {
-  downloadCoverImage,
-  generateSyntheticTestTone,
-  tagAndTranscodeMp3,
-  verifyMp3WithProbe
-} from './metadata';
+import { downloadCoverImage, generateSyntheticTestTone, tagAndTranscodeMp3, verifyMp3WithProbe } from './metadata';
 import { buildZipFilename, createExportZip } from './packaging';
-import {
-  ServerExportJob,
-  ServerExportTrack,
-  TrackDiagnostic
-} from './types';
+import { CommandError, runCommand } from './process';
+import type { ServerExportJob, ServerExportTrack, TrackDiagnostic } from './types';
 
 export const MAX_CONCURRENT_WORKERS = 1;
 export const MAX_QUEUED_JOBS = 5;
 export const MAX_TRACKS_PER_JOB = 50;
-export const TRACK_TIMEOUT_MS = 120000; // 2 minutes
-export const ARTIFACT_TTL_MS = 60 * 60 * 1000; // 1 hour
+export const TRACK_TIMEOUT_MS = 120000;
+export const ARTIFACT_TTL_MS = 60 * 60 * 1000;
+const defaults = { cover: downloadCoverImage, tag: tagAndTranscodeMp3, probe: verifyMp3WithProbe, tone: generateSyntheticTestTone, zip: createExportZip };
+export type PipelineDependencies = Partial<typeof defaults> & { extract?: (url: string, output: string, signal: AbortSignal) => Promise<void> };
+
+function isSuccessfulOutcome(job: ServerExportJob): boolean {
+  return job.processingStatus === 'completed' || job.processingStatus === 'partial';
+}
 
 export class ExportPipelineManager {
-  private jobs: Map<string, ServerExportJob> = new Map();
-  private activeProcesses: Map<string, ChildProcess> = new Map();
-  private abortControllers: Map<string, AbortController> = new Map();
+  private jobs = new Map<string, ServerExportJob>();
+  private controllers = new Map<string, AbortController>();
+  private finishedAt = new Map<string, number>();
   private executionQueue: string[] = [];
-  private activeWorkersCount = 0;
-  private exportsDir: string;
-  private ytdlpPath: string;
-
-  constructor(exportsDir: string, ytdlpPath: string) {
-    this.exportsDir = exportsDir;
-    this.ytdlpPath = ytdlpPath;
-
-    // Periodic sweep for expired jobs
-    setInterval(() => {
-      this.cleanupExpiredJobs();
-    }, 10 * 60 * 1000).unref();
+  private running = new Set<string>();
+  private sweep: ReturnType<typeof setInterval>;
+  private io: typeof defaults;
+  constructor(private exportsDir: string, private ytdlpPath: string, private dependencies: PipelineDependencies = {}) {
+    fs.mkdirSync(exportsDir, { recursive: true });
+    this.io = { ...defaults, ...dependencies };
+    this.sweep = setInterval(() => this.cleanupExpiredJobs(), 600000);
+    this.sweep.unref();
   }
-
-  getJob(jobId: string): ServerExportJob | undefined {
-    return this.jobs.get(jobId);
+  dispose() { clearInterval(this.sweep); for (const id of this.running) this.cancelJob(id); }
+  getJob(id: string) { return this.jobs.get(id); }
+  getAllJobs() { return [...this.jobs.values()].sort((a, b) => b.createdAt - a.createdAt); }
+  getQueueStatus() { return { activeWorkers: this.running.size, queuedJobsCount: this.executionQueue.length, maxWorkers: MAX_CONCURRENT_WORKERS, maxQueue: MAX_QUEUED_JOBS }; }
+  private recount(job: ServerExportJob) {
+    job.successfulTracksCount = job.tracks.filter((track) => track.status === 'completed').length;
+    job.failedTracksCount = job.tracks.filter((track) => track.status === 'failed').length;
+    job.overallProgress = Math.floor((job.successfulTracksCount + job.failedTracksCount) / job.totalTracks * 90);
   }
-
-  getAllJobs(): ServerExportJob[] {
-    return Array.from(this.jobs.values()).sort((a, b) => b.createdAt - a.createdAt);
-  }
-
-  getQueueStatus() {
-    return {
-      activeWorkers: this.activeWorkersCount,
-      queuedJobsCount: this.executionQueue.length,
-      maxWorkers: MAX_CONCURRENT_WORKERS,
-      maxQueue: MAX_QUEUED_JOBS
-    };
-  }
-
-  /**
-   * Registers a validated job and enqueues execution
-   */
   enqueueJob(job: ServerExportJob): { enqueued: boolean; error?: string } {
-    if (this.executionQueue.length >= MAX_QUEUED_JOBS) {
-      return {
-        enqueued: false,
-        error: `Export queue is full (${this.executionQueue.length}/${MAX_QUEUED_JOBS}). Please try again later.`
-      };
-    }
-
+    if (!/^[A-Za-z0-9_-]+$/.test(job.id) || !job.tracks.length || job.tracks.length > MAX_TRACKS_PER_JOB) return { enqueued: false, error: 'Invalid job or track count.' };
+    if (this.jobs.has(job.id)) return { enqueued: false, error: 'Duplicate job ID.' };
+    if (this.executionQueue.length >= MAX_QUEUED_JOBS) return { enqueued: false, error: 'Export queue is full.' };
+    job.totalTracks = job.tracks.length;
+    this.recount(job);
     this.jobs.set(job.id, job);
     this.executionQueue.push(job.id);
-    this.drainQueue();
+    queueMicrotask(() => void this.drainQueue());
     return { enqueued: true };
   }
-
-  /**
-   * Drains the execution queue respecting MAX_CONCURRENT_WORKERS = 1
-   */
   private async drainQueue() {
-    if (this.activeWorkersCount >= MAX_CONCURRENT_WORKERS) {
-      return;
-    }
-
-    const nextJobId = this.executionQueue.shift();
-    if (!nextJobId) return;
-
-    const job = this.jobs.get(nextJobId);
-    if (!job || job.processingStatus === 'failed') {
-      this.drainQueue();
-      return;
-    }
-
-    this.activeWorkersCount++;
-    try {
-      if (job.isSyntheticDiagnostic) {
-        await this.runSyntheticDiagnosticJob(job);
-      } else {
-        await this.runRealJob(job);
-      }
-    } catch (err: any) {
-      console.error(`Unexpected worker exception on job ${job.id}:`, err);
-      job.processingStatus = 'failed';
-      job.errorMessage = `Unexpected pipeline worker error: ${err.message}`;
+    if (this.running.size >= MAX_CONCURRENT_WORKERS) return;
+    const id = this.executionQueue.shift();
+    if (!id) return;
+    const job = this.jobs.get(id);
+    if (!job) { void this.drainQueue(); return; }
+    const controller = new AbortController();
+    this.running.add(id);
+    this.controllers.set(id, controller);
+    job.processingStatus = 'processing';
+    try { await this.run(job, controller.signal); }
+    catch (error: any) {
+      if (!controller.signal.aborted) { job.processingStatus = 'failed'; job.artifactAvailability = 'not_created'; job.errorMessage = `Pipeline failed: ${error.message}`; }
     } finally {
-      this.activeWorkersCount--;
-      this.drainQueue();
+      this.controllers.delete(id);
+      this.running.delete(id);
+      this.finishedAt.set(id, Date.now());
+      this.recount(job);
+      if (isSuccessfulOutcome(job)) job.overallProgress = 100;
+      void this.drainQueue();
     }
   }
-
-  /**
-   * Cancels a running or queued job, terminating active subprocesses
-   */
-  cancelJob(jobId: string): boolean {
-    const job = this.jobs.get(jobId);
-    if (!job) return false;
-
-    // Remove from queue if not started
-    const queueIdx = this.executionQueue.indexOf(jobId);
-    if (queueIdx !== -1) {
-      this.executionQueue.splice(queueIdx, 1);
-    }
-
-    // Abort controller
-    const controller = this.abortControllers.get(jobId);
-    if (controller) {
-      controller.abort();
-      this.abortControllers.delete(jobId);
-    }
-
-    // Kill active subprocess
-    const proc = this.activeProcesses.get(jobId);
-    if (proc) {
-      try {
-        proc.kill('SIGTERM');
-        setTimeout(() => {
-          try {
-            proc.kill('SIGKILL');
-          } catch {
-            // ignore
-          }
-        }, 800);
-      } catch {
-        // ignore
-      }
-      this.activeProcesses.delete(jobId);
-    }
-
+  cancelJob(id: string): boolean {
+    const job = this.jobs.get(id);
+    if (!job || !['queued', 'processing'].includes(job.processingStatus)) return false;
+    this.executionQueue = this.executionQueue.filter((queued) => queued !== id);
+    this.controllers.get(id)?.abort();
     job.processingStatus = 'failed';
-    job.errorMessage = 'Export was cancelled by user.';
     job.artifactAvailability = 'not_created';
-    job.tracks.forEach((t) => {
-      if (t.status === 'downloading' || t.status === 'resolving' || t.status === 'pending') {
-        t.status = 'failed';
-        t.diagnostic = {
-          category: 'timeout',
-          stage: 'download',
-          sanitizedMessage: 'Export cancelled by user.'
-        };
-      }
-    });
-
+    job.errorMessage = 'Export was cancelled by user.';
+    for (const track of job.tracks) if (track.status !== 'completed') { track.status = 'failed'; track.error = 'Cancelled by user.'; }
+    this.recount(job);
+    this.finishedAt.set(id, Date.now());
     return true;
   }
-
-  /**
-   * Retries only failed tracks while preserving existing successful files
-   */
-  retryJob(jobId: string): { success: boolean; job?: ServerExportJob; error?: string } {
-    const job = this.jobs.get(jobId);
+  retryJob(id: string): { success: boolean; job?: ServerExportJob; error?: string } {
+    const job = this.jobs.get(id);
     if (!job) return { success: false, error: 'Job not found' };
-
-    if (this.executionQueue.includes(jobId) || job.processingStatus === 'processing') {
-      return { success: false, error: 'Job is currently in progress or queued.' };
-    }
-
-    // Reset only failed/pending tracks; keep valid completed tracks and local paths intact
-    let eligibleRetryCount = 0;
-    job.tracks.forEach((t) => {
-      if (t.status !== 'completed' || !t.localPath || !fs.existsSync(t.localPath)) {
-        t.status = 'pending';
-        t.progressPercent = 0;
-        t.error = undefined;
-        t.diagnostic = undefined;
-        t.localPath = undefined;
-        eligibleRetryCount++;
-      }
-    });
-
-    if (eligibleRetryCount === 0 && job.successfulTracksCount === job.totalTracks) {
-      return { success: false, error: 'All tracks already succeeded.' };
-    }
-
-    job.processingStatus = 'queued';
-    job.errorMessage = undefined;
-    job.overallProgress = Math.floor((job.successfulTracksCount / job.totalTracks) * 80);
-
-    const enq = this.enqueueJob(job);
-    return { success: enq.enqueued, job, error: enq.error };
+    if (this.running.has(id) || this.executionQueue.includes(id)) return { success: false, error: 'Previous attempt is still settling or queued.' };
+    if (this.executionQueue.length >= MAX_QUEUED_JOBS) return { success: false, error: 'Export queue is full.' };
+    const valid = (track: ServerExportTrack) => track.status === 'completed' && !!track.localPath && fs.existsSync(track.localPath) && fs.statSync(track.localPath).size > 0;
+    if (job.tracks.every(valid) && job.artifactAvailability === 'available' && job.zipPath && fs.existsSync(job.zipPath)) return { success: false, error: 'All tracks and archive are already available.' };
+    for (const track of job.tracks) if (!valid(track)) { track.status = 'pending'; track.progressPercent = 0; track.localPath = undefined; track.error = undefined; track.diagnostic = undefined; }
+    if (job.zipPath) fs.rmSync(job.zipPath, { force: true });
+    job.zipPath = undefined; job.zipFilename = undefined; job.zipSizeBytes = undefined;
+    job.artifactAvailability = 'not_created'; job.completedAt = undefined; job.errorMessage = undefined; job.processingStatus = 'queued';
+    this.finishedAt.delete(id);
+    this.recount(job);
+    this.executionQueue.push(id);
+    queueMicrotask(() => void this.drainQueue());
+    return { success: true, job };
   }
-
-  /**
-   * Executes genuine media extraction and processing for an export job
-   */
-  private async runRealJob(job: ServerExportJob) {
-    job.processingStatus = 'processing';
-    const abortCtrl = new AbortController();
-    this.abortControllers.set(job.id, abortCtrl);
-
-    const jobTempDir = path.join(this.exportsDir, job.id);
-    fs.mkdirSync(jobTempDir, { recursive: true });
-
-    // Download cover artwork if available
-    let localCoverPath: string | undefined;
-    if (job.coverUrl) {
-      localCoverPath = path.join(jobTempDir, 'cover_art.jpg');
-      const downloaded = await downloadCoverImage(job.coverUrl, localCoverPath);
-      if (!downloaded) {
-        localCoverPath = undefined;
-      }
-    }
-
-    for (let i = 0; i < job.tracks.length; i++) {
-      if (abortCtrl.signal.aborted) break;
-
-      const track = job.tracks[i];
-      // Skip tracks that previously succeeded during retry
-      if (track.status === 'completed' && track.localPath && fs.existsSync(track.localPath)) {
-        continue;
-      }
-
-      track.status = 'downloading';
-      track.progressPercent = 10;
-      this.updateOverallProgress(job);
-
-      const rawVideoId = track.trackId
-        .replace(/^ytm-trk:/, '')
-        .replace(/^ytmusic:/, '')
-        .trim();
-
-      // Validate YouTube video ID format
-      const validVideoIdRegex = /^[a-zA-Z0-9_-]{11}$/;
-      if (!validVideoIdRegex.test(rawVideoId)) {
-        track.status = 'failed';
-        track.error = `Invalid YouTube video ID format: ${rawVideoId}`;
-        track.diagnostic = {
-          category: 'validation_error',
-          stage: 'validation',
-          sanitizedMessage: `Invalid YouTube video ID: "${rawVideoId}".`
-        };
-        job.failedTracksCount++;
-        this.updateOverallProgress(job);
-        continue;
-      }
-
-      const videoUrl = `https://www.youtube.com/watch?v=${rawVideoId}`;
-      const rawAudioPath = path.join(jobTempDir, `raw_track_${i + 1}.mp3`);
-      const taggedAudioPath = path.join(jobTempDir, `track_${i + 1}.mp3`);
-
-      // 1. Stream Extraction via yt-dlp
-      const extractResult = await this.executeYtDlp(job.id, videoUrl, rawAudioPath, abortCtrl.signal);
-
-      if (!extractResult.success || !fs.existsSync(rawAudioPath)) {
-        track.status = 'failed';
-        track.error = extractResult.diagnostic?.sanitizedMessage || 'Stream download failed.';
-        track.diagnostic = extractResult.diagnostic || {
-          category: 'unknown',
-          stage: 'download',
-          sanitizedMessage: 'Stream download failed.'
-        };
-        job.failedTracksCount++;
-        this.updateOverallProgress(job);
-        continue;
-      }
-
-      // 2. Tagging & Artwork Embedding via FFmpeg
-      track.status = 'tagging';
-      track.progressPercent = 80;
-      this.updateOverallProgress(job);
-
-      try {
-        await tagAndTranscodeMp3({
-          audioPath: rawAudioPath,
-          outputPath: taggedAudioPath,
-          title: track.title,
-          artist: track.artistCredit || job.artistName,
-          albumArtist: job.albumArtist || job.artistName,
-          album: job.releaseTitle,
-          year: job.year,
-          trackNumber: track.trackNumber,
-          totalTracks: job.totalTracks,
-          discNumber: track.discNumber,
-          coverPath: localCoverPath
-        });
-
-        // 3. Output verification using ffprobe
-        const probe = await verifyMp3WithProbe(taggedAudioPath);
-        if (!probe.verified) {
-          throw new Error(probe.error || 'MP3 audio verification failed after tagging.');
-        }
-
-        // Clean up raw temp audio to bound storage
-        try {
-          fs.unlinkSync(rawAudioPath);
-        } catch {
-          // ignore
-        }
-
-        track.status = 'completed';
-        track.progressPercent = 100;
-        track.localPath = taggedAudioPath;
-        job.successfulTracksCount++;
-      } catch (tagErr: any) {
-        track.status = 'failed';
-        track.error = tagErr.message || 'Tagging failed.';
-        track.diagnostic = {
-          category: 'conversion_failure',
-          stage: 'tagging',
-          sanitizedMessage: `Metadata embedding failed: ${tagErr.message}`
-        };
-        job.failedTracksCount++;
-      }
-
-      this.updateOverallProgress(job);
-    }
-
-    this.abortControllers.delete(job.id);
-    this.activeProcesses.delete(job.id);
-
-    // If all tracks failed, tagging/packaging are strictly skipped and neutral summary reported!
-    if (job.successfulTracksCount === 0) {
-      job.processingStatus = 'failed';
-      job.artifactAvailability = 'not_created';
-
-      // Build neutral diagnostic summary from distinct reasons
-      const distinctReasons = Array.from(
-        new Set(job.tracks.map((t) => t.diagnostic?.sanitizedMessage).filter(Boolean))
-      );
-      const summaryMsg =
-        distinctReasons.length > 0
-          ? `0 of ${job.totalTracks} tracks downloaded successfully. Cause: ${distinctReasons.join('; ')}`
-          : `0 of ${job.totalTracks} tracks downloaded successfully.`;
-
-      job.errorMessage = summaryMsg;
-      job.overallProgress = 100;
-      return;
-    }
-
-    // Packaging into ZIP archive
-    try {
-      const zipFilename = buildZipFilename(job.artistName, job.releaseTitle, job.year);
-      const zipPath = path.join(this.exportsDir, `${job.id}.zip`);
-
-      await createExportZip({
-        tracks: job.tracks,
-        zipPath,
-        artistName: job.artistName,
-        releaseTitle: job.releaseTitle,
-        year: job.year
-      });
-
-      job.zipPath = zipPath;
-      job.zipFilename = zipFilename;
-      job.zipSizeBytes = fs.statSync(zipPath).size;
-      job.artifactAvailability = 'available';
-      job.completedAt = Date.now();
-      job.overallProgress = 100;
-
-      if (job.successfulTracksCount === job.totalTracks) {
-        job.processingStatus = 'completed';
-      } else {
-        job.processingStatus = 'partial';
-      }
-    } catch (zipErr: any) {
-      job.processingStatus = 'failed';
-      job.artifactAvailability = 'not_created';
-      job.errorMessage = `Archive packaging failed: ${zipErr.message}`;
-    }
+  private async extract(url: string, output: string, signal: AbortSignal) {
+    if (this.dependencies.extract) return this.dependencies.extract(url, output, signal);
+    await runCommand(this.ytdlpPath, ['--no-playlist', '--no-warnings', '--no-progress', '--no-part', '--max-filesize', '100M', '-f', 'bestaudio/best', '-o', output, '--', url], signal, TRACK_TIMEOUT_MS);
   }
-
-  /**
-   * Explicit Synthetic Diagnostic Test Runner
-   * Only reachable through clearly labeled diagnostic tests.
-   */
-  private async runSyntheticDiagnosticJob(job: ServerExportJob) {
-    job.processingStatus = 'processing';
-    const jobTempDir = path.join(this.exportsDir, job.id);
-    fs.mkdirSync(jobTempDir, { recursive: true });
-
-    for (let i = 0; i < job.tracks.length; i++) {
-      const track = job.tracks[i];
-      track.status = 'converting';
-      track.progressPercent = 50;
-      this.updateOverallProgress(job);
-
-      const tonePath = path.join(jobTempDir, `diagnostic_track_${i + 1}.mp3`);
-      try {
-        await generateSyntheticTestTone(
-          tonePath,
-          track.title,
-          track.artistCredit || job.artistName,
-          track.trackNumber,
-          track.discNumber,
-          job.year
-        );
-
-        // Verify with ffprobe
-        const probe = await verifyMp3WithProbe(tonePath);
-        if (!probe.verified) {
-          throw new Error('Synthetic audio verification with ffprobe failed.');
-        }
-
-        track.status = 'completed';
-        track.progressPercent = 100;
-        track.localPath = tonePath;
-        job.successfulTracksCount++;
-      } catch (err: any) {
-        track.status = 'failed';
-        track.error = err.message;
-        track.diagnostic = {
-          category: 'conversion_failure',
-          stage: 'conversion',
-          sanitizedMessage: err.message
-        };
-        job.failedTracksCount++;
-      }
-
-      this.updateOverallProgress(job);
+  private async run(job: ServerExportJob, signal: AbortSignal) {
+    const directory = path.join(this.exportsDir, job.id);
+    fs.mkdirSync(directory, { recursive: true });
+    let coverPath: string | undefined;
+    if (!job.isSyntheticDiagnostic && job.coverUrl) {
+      const candidate = path.join(directory, 'cover.jpg');
+      if (await this.io.cover(job.coverUrl, candidate, 6000, signal)) coverPath = candidate;
     }
-
-    if (job.successfulTracksCount > 0) {
+    if (signal.aborted) return;
+    for (const [index, track] of job.tracks.entries()) {
+      if (signal.aborted) return;
+      if (track.status === 'completed' && track.localPath && fs.existsSync(track.localPath)) continue;
+      const raw = path.join(directory, `source_${index + 1}.media`);
+      const output = path.join(directory, `track_${index + 1}.mp3`);
+      let stage: 'download' | 'tagging' = 'download';
       try {
-        const zipFilename = buildZipFilename(job.artistName, job.releaseTitle, job.year);
-        const zipPath = path.join(this.exportsDir, `${job.id}.zip`);
-
-        await createExportZip({
-          tracks: job.tracks,
-          zipPath,
-          artistName: job.artistName,
-          releaseTitle: job.releaseTitle,
-          year: job.year
-        });
-
-        job.zipPath = zipPath;
-        job.zipFilename = zipFilename;
-        job.zipSizeBytes = fs.statSync(zipPath).size;
-        job.artifactAvailability = 'available';
-        job.completedAt = Date.now();
-        job.overallProgress = 100;
-        job.processingStatus = job.successfulTracksCount === job.totalTracks ? 'completed' : 'partial';
-      } catch (err: any) {
-        job.processingStatus = 'failed';
-        job.artifactAvailability = 'not_created';
-        job.errorMessage = `Synthetic ZIP packaging failed: ${err.message}`;
-      }
-    } else {
-      job.processingStatus = 'failed';
-      job.artifactAvailability = 'not_created';
-      job.errorMessage = 'Zero synthetic tracks generated.';
-    }
-  }
-
-  /**
-   * Updates job overall progress strictly from track stages without arbitrary jumps
-   */
-  private updateOverallProgress(job: ServerExportJob) {
-    if (job.totalTracks === 0) {
-      job.overallProgress = 0;
-      return;
-    }
-
-    let trackProgressSum = 0;
-    job.tracks.forEach((t) => {
-      if (t.status === 'completed') trackProgressSum += 100;
-      else if (t.status === 'failed') trackProgressSum += 100;
-      else if (t.status === 'tagging') trackProgressSum += 80;
-      else if (t.status === 'downloading') trackProgressSum += t.progressPercent || 30;
-      else trackProgressSum += 0;
-    });
-
-    const averageTrackProgress = trackProgressSum / job.totalTracks;
-    // Scale average track progress to 90%, leaving 10% for final ZIP packaging
-    job.overallProgress = Math.min(95, Math.floor(averageTrackProgress * 0.9));
-  }
-
-  /**
-   * Spawns yt-dlp with bounded runtime, output limits, and process cancellation
-   */
-  private executeYtDlp(
-    jobId: string,
-    url: string,
-    outputPath: string,
-    abortSignal: AbortSignal
-  ): Promise<{ success: boolean; diagnostic?: TrackDiagnostic }> {
-    return new Promise((resolve) => {
-      if (abortSignal.aborted) {
-        return resolve({
-          success: false,
-          diagnostic: {
-            category: 'timeout',
-            stage: 'download',
-            sanitizedMessage: 'Job was cancelled before stream download started.'
-          }
-        });
-      }
-
-      if (!fs.existsSync(this.ytdlpPath)) {
-        return resolve({
-          success: false,
-          diagnostic: {
-            category: 'missing_executable',
-            stage: 'download',
-            sanitizedMessage: `yt-dlp executable missing at ${this.ytdlpPath}`
-          }
-        });
-      }
-
-      const args = [
-        '-x',
-        '--audio-format',
-        'mp3',
-        '--no-playlist',
-        '--no-warnings',
-        '-o',
-        outputPath,
-        url
-      ];
-
-      let proc: ChildProcess;
-      try {
-        proc = spawn(this.ytdlpPath, args);
-      } catch (spawnErr: any) {
-        const diag = classifyProcessError('download', null, '', '', spawnErr.code || spawnErr.message);
-        return resolve({ success: false, diagnostic: diag });
-      }
-
-      this.activeProcesses.set(jobId, proc);
-
-      let stdout = '';
-      let stderr = '';
-      let timedOut = false;
-      let settled = false;
-
-      const timeoutTimer = setTimeout(() => {
-        timedOut = true;
-        try {
-          proc.kill('SIGTERM');
-          setTimeout(() => {
-            try {
-              proc.kill('SIGKILL');
-            } catch {
-              // ignore
-            }
-          }, 500);
-        } catch {
-          // ignore
-        }
-      }, TRACK_TIMEOUT_MS);
-
-      const abortHandler = () => {
-        try {
-          proc.kill('SIGTERM');
-        } catch {
-          // ignore
-        }
-      };
-      abortSignal.addEventListener('abort', abortHandler);
-
-      proc.stdout?.on('data', (d: Buffer) => {
-        if (stdout.length < 2048) {
-          stdout += d.toString().slice(0, 2048 - stdout.length);
-        }
-      });
-
-      proc.stderr?.on('data', (d: Buffer) => {
-        if (stderr.length < 2048) {
-          stderr += d.toString().slice(0, 2048 - stderr.length);
-        }
-      });
-
-      proc.on('error', (err: any) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timeoutTimer);
-        abortSignal.removeEventListener('abort', abortHandler);
-        console.error(`[yt-dlp spawn error] job=${jobId}:`, err);
-        const diag = classifyProcessError('download', null, stderr, stdout, err.code || err.message);
-        resolve({ success: false, diagnostic: diag });
-      });
-
-      proc.on('close', (code: number | null) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timeoutTimer);
-        abortSignal.removeEventListener('abort', abortHandler);
-
-        if (code === 0 && fs.existsSync(outputPath)) {
-          resolve({ success: true });
+        fs.rmSync(raw, { force: true }); fs.rmSync(output, { force: true });
+        if (job.isSyntheticDiagnostic) {
+          track.status = 'converting';
+          await this.io.tone(output, track.title, track.artistCredit || job.artistName, track.trackNumber, track.discNumber, job.year, signal);
         } else {
-          // Log original error for server diagnostics
-          console.error(`[yt-dlp failed] job=${jobId} code=${code} timedOut=${timedOut} stderr:`, stderr.trim());
-          const diag = classifyProcessError('download', code, stderr, stdout, undefined, timedOut);
-          resolve({ success: false, diagnostic: diag });
+          const videoId = track.trackId.replace(/^(ytm-trk:|ytmusic:)/, '');
+          if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) throw new Error('Invalid YouTube video ID.');
+          track.status = 'downloading'; track.progressPercent = 0;
+          await this.extract(`https://www.youtube.com/watch?v=${videoId}`, raw, signal);
+          if (signal.aborted) return;
+          stage = 'tagging'; track.status = 'tagging';
+          await this.io.tag({ audioPath: raw, outputPath: output, title: track.title, artist: track.artistCredit || job.artistName, albumArtist: job.albumArtist || job.artistName, album: job.releaseTitle, year: job.year, trackNumber: track.trackNumber, discNumber: track.discNumber, coverPath, signal });
         }
-      });
-    });
-  }
-
-  /**
-   * Sweeps expired export directories and marks jobs as expired
-   */
-  cleanupExpiredJobs() {
-    const now = Date.now();
-    for (const job of this.jobs.values()) {
-      if (job.completedAt && now - job.completedAt > ARTIFACT_TTL_MS) {
-        job.artifactAvailability = 'expired';
-        const jobDir = path.join(this.exportsDir, job.id);
-        const zipFile = job.zipPath;
-        try {
-          if (fs.existsSync(jobDir)) {
-            fs.rmSync(jobDir, { recursive: true, force: true });
-          }
-          if (zipFile && fs.existsSync(zipFile)) {
-            fs.unlinkSync(zipFile);
-          }
-        } catch (err) {
-          console.error(`Error cleaning up expired job ${job.id}:`, err);
-        }
+        if (signal.aborted) return;
+        const expected = job.isSyntheticDiagnostic ? undefined : { audioPath: raw, outputPath: output, title: track.title, artist: track.artistCredit || job.artistName, albumArtist: job.albumArtist || job.artistName, album: job.releaseTitle, year: job.year, trackNumber: track.trackNumber, discNumber: track.discNumber, coverPath };
+        const probe = await this.io.probe(output, expected, signal);
+        if (signal.aborted) return;
+        if (!probe.verified || !fs.existsSync(output) || fs.statSync(output).size === 0) throw new Error(probe.error || 'Output verification failed.');
+        track.status = 'completed'; track.progressPercent = 100; track.localPath = output; track.error = undefined; track.diagnostic = undefined;
+      } catch (error: any) {
+        if (signal.aborted) return;
+        track.status = 'failed'; track.error = error.message;
+        let diagnostic: TrackDiagnostic = { category: stage === 'tagging' ? 'conversion_failure' : 'unknown', stage, sanitizedMessage: String(error.message).slice(0, 500) };
+        if (error instanceof CommandError) { const r = error.result; diagnostic = classifyProcessError(stage, r.code, r.stderr, r.stdout, r.spawnCode, r.timedOut); }
+        track.diagnostic = diagnostic;
+      } finally {
+        fs.rmSync(raw, { force: true });
+        if (track.status !== 'completed') fs.rmSync(output, { force: true });
       }
+      this.recount(job);
+    }
+    if (signal.aborted) return;
+    this.recount(job);
+    if (!job.successfulTracksCount) {
+      job.processingStatus = 'failed'; job.artifactAvailability = 'not_created';
+      const causes = [...new Set(job.tracks.map((track) => track.diagnostic?.sanitizedMessage || track.error).filter(Boolean))];
+      job.errorMessage = `0 of ${job.totalTracks} tracks downloaded successfully. ${causes.join('; ')}`;
+      return;
+    }
+    const staging = path.join(this.exportsDir, `${job.id}.zip.part`);
+    const destination = path.join(this.exportsDir, `${job.id}.zip`);
+    try {
+      await this.io.zip({ tracks: job.tracks, zipPath: staging, artistName: job.artistName, releaseTitle: job.releaseTitle, year: job.year });
+      if (signal.aborted) return;
+      fs.renameSync(staging, destination);
+      job.zipPath = destination;
+      job.zipFilename = buildZipFilename(job.artistName, job.releaseTitle + (job.editionLabel ? ` [${job.editionLabel}]` : ''), job.year);
+      job.zipSizeBytes = fs.statSync(destination).size;
+      job.artifactAvailability = 'available'; job.completedAt = Date.now();
+      job.processingStatus = job.successfulTracksCount === job.totalTracks ? 'completed' : 'partial';
+    } finally { fs.rmSync(staging, { force: true }); }
+  }
+  cleanupExpiredJobs() {
+    for (const job of this.jobs.values()) {
+      if (this.running.has(job.id) || this.executionQueue.includes(job.id)) continue;
+      const finished = this.finishedAt.get(job.id) ?? job.completedAt;
+      if (!finished || Date.now() - finished <= ARTIFACT_TTL_MS) continue;
+      try {
+        fs.rmSync(path.join(this.exportsDir, job.id), { recursive: true, force: true });
+        fs.rmSync(path.join(this.exportsDir, `${job.id}.zip`), { force: true });
+        fs.rmSync(path.join(this.exportsDir, `${job.id}.zip.part`), { force: true });
+        if (job.artifactAvailability === 'available') job.artifactAvailability = 'expired';
+      } catch (error) { console.error('Export cleanup failed', job.id, error); }
     }
   }
 }
