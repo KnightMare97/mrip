@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: music-rip
+    env: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: MUSICRIP_API_SECRET
+        sync: false # Set securely in Render dashboard
