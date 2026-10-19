@@ -1,8 +1,12 @@
 import assert from 'node:assert';
 import test from 'node:test';
 
-const BASE_URL = 'http://localhost:3000';
+const BASE_URL = process.env.BASE_URL || 'http://localhost:3000';
+const RUN_LIVE = process.env.RUN_LIVE_SERVER_TESTS === '1';
 
+if (!RUN_LIVE) {
+  test('Live server & YouTube tests (skipped in offline/local test run)', { skip: 'Set RUN_LIVE_SERVER_TESTS=1 to run against active live server' }, () => {});
+} else {
 test('Server API - Health check reports observed capabilities with bounded checks', async () => {
   const res = await fetch(`${BASE_URL}/api/health`);
   assert.strictEqual(res.status, 200);
@@ -185,3 +189,4 @@ test('Pipeline Verification B - Authorized source integration (Records actual ou
     assert.ok(finalJob.errorMessage.includes('0 of 1 tracks downloaded successfully'));
   }
 });
+}

@@ -22,7 +22,7 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const EXPORTS_DIR = path.join('/tmp', 'musicrip_exports');
+const EXPORTS_DIR = process.env.MUSICRIP_EXPORT_DIR || path.join('/tmp', 'musicrip_exports');
 const YTDLP_BIN = path.join(__dirname, 'bin', 'yt-dlp');
 
 // Ensure writable export directory exists
@@ -513,7 +513,7 @@ async function startServer() {
     app.get('*', (_req, res) => {
       res.sendFile(path.join(__dirname, 'dist', 'index.html'));
     });
-  } else {
+  } else if (process.env.NODE_ENV !== 'test') {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true }
@@ -521,9 +521,21 @@ async function startServer() {
     app.use(vite.middlewares);
   }
 
-  app.listen(PORT, () => {
-    console.log(`Music Rip server running on http://localhost:${PORT}`);
+  const server = app.listen(PORT, () => {
+    const addr = server.address();
+    const actualPort = typeof addr === 'object' && addr ? addr.port : PORT;
+    console.log(`Music Rip server running on http://localhost:${actualPort}`);
   });
+
+  const shutdown = () => {
+    pipelineManager.dispose();
+    server.close(() => {
+      process.exit(0);
+    });
+    setTimeout(() => process.exit(0), 1000).unref();
+  };
+  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
 }
 
 startServer();

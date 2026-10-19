@@ -78,7 +78,7 @@ All commands executed cleanly on `fix/export-reliability`:
 ## 5. Explicitly Unverified Areas
 
 The following domains are deliberately out of scope for Checkpoint 1 and remain unverified:
-1. **Browser IndexedDB live runtime**: Unit tests verified validation, sanitization, and transaction completion logic; runtime IndexedDB behavior inside live browser engines remains unverified.
+1. **Browser IndexedDB live runtime**: Unit tests in `test/backup-validation.test.ts` verified only schema validation, payload deduplication, and in-memory record sanitization; real browser IndexedDB database engine transactions, persistence durability, storage quota limits, and cross-tab concurrency remain completely unverified.
 2. **Authenticated server integration**: Requires a dedicated running server instance with configured `MUSICRIP_API_SECRET` and client session headers.
 3. **Actual YouTube stream retrieval**: Tests verify command runners and error handling via deterministic mocks; actual network downloads against YouTube's live endpoints remain unverified.
 4. **Album ZIP archive file structure & integrity**: Verification of generated binary ZIP files under full multi-track export loads.
